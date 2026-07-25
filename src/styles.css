@@ -360,8 +360,14 @@ html, body {
 .cm-editor.cm-focused { outline: none; }
 /* Note text is the system UI face, matching the Mac theme's "SF Pro Text"
    default. Both come from the theme, so the customization settings can drive
-   them later without touching this file. */
-.cm-scroller {
+   them later without touching this file.
+
+   `.cm-editor .cm-scroller` rather than `.cm-scroller`: CodeMirror's base
+   theme sets `font-family: monospace` here and injects its stylesheet at
+   runtime, after this file, so an equal-specificity rule loses. font-size
+   isn't in its base theme, which is why that half applied and the family
+   silently didn't. */
+.cm-editor .cm-scroller {
   font-family: var(--envy-font-family);
   font-size: var(--envy-font-size);
   line-height: 1.6;
