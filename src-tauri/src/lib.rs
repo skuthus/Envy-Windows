@@ -849,10 +849,20 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
 /// Hiding rather than minimising is deliberate: Envy is meant to be summoned
 /// and dismissed, so it should leave the taskbar and Alt-Tab entirely rather
 /// than sit there as a minimised window you then have to find.
+///
+/// The test is *visible*, not visible-and-focused. Whether the window is on
+/// screen is the whole question; the app's activation state is a different
+/// one. Checking focus broke the tray entirely — clicking a tray icon takes
+/// focus away from the window, so by the time this ran the window was never
+/// focused and the click could only ever show, never hide.
+///
+/// A minimised window counts as "not on screen" and is restored rather than
+/// hidden, so a window minimised the ordinary way comes back instead of
+/// vanishing further.
 fn toggle_window(window: &WebviewWindow) {
     let visible = window.is_visible().unwrap_or(false);
-    let focused = window.is_focused().unwrap_or(false);
-    if visible && focused {
+    let minimised = window.is_minimized().unwrap_or(false);
+    if visible && !minimised {
         let _ = window.hide();
     } else {
         let _ = window.show();
