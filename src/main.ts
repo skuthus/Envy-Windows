@@ -1303,6 +1303,13 @@ void listen<string>('open-note', async (e) => {
   renderList()
 })
 
+// Tray menu: "New Note" and "Settings…".
+void listen('new-note', () => {
+  searchInput.focus()
+  searchInput.select()
+})
+void listen('open-settings', () => openSettings())
+
 // The tray pin can be cleared from the popover or the global unpin shortcut,
 // so the marker in the list has to follow rather than assume.
 void listen('pinned-note-changed', async () => {

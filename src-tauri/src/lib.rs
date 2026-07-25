@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use envy_core::{IndexWatcher, NoteStore, SearchContext};
 use serde::Serialize;
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
@@ -451,31 +451,168 @@ fn setup_global_hotkey(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
+/// Builds the tray menu against current state.
+///
+/// Rebuilt on every open rather than built once, because two of its entries
+/// depend on things that change while the app runs: the template list, and
+/// whether anything is pinned. A menu assembled at launch would offer
+/// templates that have since been deleted and grey out an Unpin that is now
+/// live.
+fn build_tray_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, Box<dyn std::error::Error>> {
+    let new_note = MenuItem::with_id(app, "new_note", "New Note", true, None::<&str>)?;
+    let new_pinned =
+        MenuItem::with_id(app, "new_pinned", "New Pinned Note", true, None::<&str>)?;
+
+    let templates: Vec<envy_core::NoteTemplate> = app
+        .try_state::<AppState>()
+        .map(|s| s.store.lock().unwrap().templates())
+        .unwrap_or_default();
+
+    let template_submenu = Submenu::with_id(app, "from_template", "New Pinned Note from Template", true)?;
+    if templates.is_empty() {
+        // Present but disabled, so the feature is discoverable before any
+        // template exists rather than the entry simply vanishing.
+        template_submenu.append(&MenuItem::with_id(
+            app,
+            "no_templates",
+            "No Templates",
+            false,
+            None::<&str>,
+        )?)?;
+    } else {
+        for t in &templates {
+            template_submenu.append(&MenuItem::with_id(
+                app,
+                format!("template:{}", t.path.to_string_lossy()),
+                &t.name,
+                true,
+                None::<&str>,
+            )?)?;
+        }
+    }
+
+    let is_pinned = app
+        .try_state::<AppState>()
+        .map(|s| s.pinned_note.lock().unwrap().is_some())
+        .unwrap_or(false);
+    let unpin = MenuItem::with_id(app, "unpin", "Unpin Note", is_pinned, None::<&str>)?;
+
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Envy", true, None::<&str>)?;
+
+    Ok(Menu::with_items(
+        app,
+        &[
+            &new_note,
+            &new_pinned,
+            &template_submenu,
+            &unpin,
+            &PredefinedMenuItem::separator(app)?,
+            &settings,
+            &quit,
+        ],
+    )?)
+}
+
+/// Re-applies the tray menu after anything it reflects has changed.
+///
+/// The menu is a snapshot: Tauri hands the OS a built menu rather than asking
+/// us to fill one on open, so "Unpin Note" would stay greyed out after a pin,
+/// and a freshly made template would not appear, unless it is replaced.
+fn refresh_tray_menu(app: &tauri::AppHandle) {
+    if let (Some(tray), Ok(menu)) = (app.tray_by_id("main"), build_tray_menu(app)) {
+        let _ = tray.set_menu(Some(menu));
+    }
+}
+
+/// Creates a note and pins it to the tray, then shows it — "New Pinned Note"
+/// and its template variants. Returns nothing useful; the popover reads the
+/// pinned id for itself.
+fn create_and_pin(app: &tauri::AppHandle, template_path: Option<&str>) {
+    let Some(state) = app.try_state::<AppState>() else { return };
+    state.mark_internal_write();
+
+    let created = {
+        let mut store = state.store.lock().unwrap();
+        match template_path {
+            Some(path) => {
+                let template = store.templates().into_iter().find(|t| t.path.to_string_lossy() == path);
+                match template {
+                    // Date and time are formatted here rather than in the
+                    // core, which stays UI-agnostic and owns no date style.
+                    Some(t) => {
+                        let now = chrono::Local::now();
+                        store.create_from_template(
+                            "",
+                            &t,
+                            &now.format("%Y-%m-%d").to_string(),
+                            &now.format("%-I:%M %p").to_string(),
+                        )
+                    }
+                    None => return,
+                }
+            }
+            None => store.create("Untitled"),
+        }
+    };
+
+    let Ok(note) = created else { return };
+    *state.pinned_note.lock().unwrap() = Some(note.id().to_string());
+    let _ = app.emit("pinned-note-changed", ());
+    refresh_tray_menu(app);
+    show_pinned_window(app);
+}
+
 /// The notification-area icon — Windows' counterpart to the Mac's menu bar
 /// item. Left click toggles the window, exactly as the hotkey does; the menu
 /// is for the things a click can't express.
 fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    let show = MenuItem::with_id(app, "show", "Show Envy", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Envy", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &quit])?;
-
     TrayIconBuilder::with_id("main")
         .icon(app.default_window_icon().cloned().ok_or("no window icon")?)
         .tooltip("Envy")
-        .menu(&menu)
+        .menu(&build_tray_menu(app)?)
         // Without this a left click opens the menu instead of reaching the
         // click handler, and the single most common gesture would be wrong.
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.unminimize();
-                    let _ = w.set_focus();
-                }
+        .on_menu_event(|app, event| {
+            let id = event.id.as_ref();
+            // Template entries carry their path in the id, since the menu is
+            // rebuilt each time and closures over a Vec would go stale.
+            if let Some(path) = id.strip_prefix("template:") {
+                create_and_pin(app, Some(path));
+                return;
             }
-            "quit" => app.exit(0),
-            _ => {}
+            match id {
+                "new_note" => {
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.show();
+                        let _ = w.unminimize();
+                        let _ = w.set_focus();
+                        let _ = w.emit("new-note", ());
+                    }
+                }
+                "new_pinned" => create_and_pin(app, None),
+                "unpin" => {
+                    if let Some(state) = app.try_state::<AppState>() {
+                        *state.pinned_note.lock().unwrap() = None;
+                    }
+                    if let Some(w) = app.get_webview_window(PINNED_WINDOW) {
+                        let _ = w.hide();
+                    }
+                    let _ = app.emit("pinned-note-changed", ());
+    refresh_tray_menu(app);
+                }
+                "settings" => {
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.show();
+                        let _ = w.unminimize();
+                        let _ = w.set_focus();
+                        let _ = w.emit("open-settings", ());
+                    }
+                }
+                "quit" => app.exit(0),
+                _ => {}
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -540,6 +677,7 @@ fn set_pinned_note(id: Option<String>, app: tauri::AppHandle, state: State<AppSt
     // Both windows care: the popover reloads, and the app repaints its pin
     // marks.
     let _ = app.emit("pinned-note-changed", ());
+    refresh_tray_menu(&app);
 }
 
 /// Brings the main window forward on a specific note — the popover's "Open"

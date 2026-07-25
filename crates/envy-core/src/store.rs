@@ -340,6 +340,37 @@ impl NoteStore {
         out
     }
 
+    /// Creates a note from a template, substituting the template tokens.
+    ///
+    /// `date_text` is caller-formatted rather than decided here, so the app's
+    /// own date-format setting applies — this crate stays UI-agnostic and
+    /// doesn't own a preferred date style.
+    ///
+    /// The *title* is substituted too, before it's used, so a template named
+    /// "Daily Notes {{date}}" produces a note titled with today's actual date
+    /// rather than the literal token. An empty title falls back to the
+    /// template's own name.
+    pub fn create_from_template(
+        &mut self,
+        title: &str,
+        template: &NoteTemplate,
+        date_text: &str,
+        time_text: &str,
+    ) -> std::io::Result<Note> {
+        let trimmed = title.trim();
+        let raw_base = if trimmed.is_empty() { &template.name } else { trimmed };
+        let base = apply_template_tokens(raw_base, raw_base, date_text, time_text);
+
+        let path = self.directory.join(unique_filename(&base, &self.directory));
+        let raw = fs::read_to_string(&template.path).unwrap_or_default();
+        let content = apply_template_tokens(&raw, &base, date_text, time_text);
+
+        fs::write(&path, &content)?;
+        let note = Note::new(path, content, SystemTime::now());
+        self.notes.insert(0, note.clone());
+        Ok(note)
+    }
+
     /// Turns a note into a template — a plain move into `Templates/`, which
     /// drops it out of `notes` since the scan never treats that folder as
     /// notes. The text is untouched: a template is just a note that lives
@@ -375,6 +406,15 @@ impl NoteStore {
         }
         Some(moved)
     }
+}
+
+/// A small fixed set of tokens — plain string replacement, not any kind of
+/// scripting, so a template stays a plain markdown file readable by any other
+/// editor too.
+fn apply_template_tokens(text: &str, title: &str, date_text: &str, time_text: &str) -> String {
+    text.replace("{{date}}", date_text)
+        .replace("{{time}}", time_text)
+        .replace("{{title}}", title)
 }
 
 fn is_markdown(p: &Path) -> bool {
@@ -756,6 +796,42 @@ mod tests {
         // Not "Test 2" — the collision is with the file itself.
         assert_eq!(renamed.title(), "Test");
         assert!(dir.path().join("Test.md").exists());
+    }
+
+    #[test]
+    fn creating_from_a_template_substitutes_tokens() {
+        let (dir, mut store) = store_with(&[(
+            "Templates/Daily.md",
+            "# {{title}}\n\nWritten {{date}} at {{time}}.\n",
+        )]);
+        let template = store.templates()[0].clone();
+
+        let note = store
+            .create_from_template("Monday", &template, "2026-07-25", "9:30 AM")
+            .unwrap();
+
+        assert_eq!(note.title(), "Monday");
+        assert_eq!(note.content(), "# Monday\n\nWritten 2026-07-25 at 9:30 AM.\n");
+        assert!(dir.path().join("Monday.md").exists());
+        // It lands in the Index, not in Templates/.
+        assert!(!dir.path().join("Templates/Monday.md").exists());
+    }
+
+    /// An empty title falls back to the template's own name — and the *title*
+    /// is substituted before use, so a template called "Daily {{date}}"
+    /// produces a note named for today rather than the literal token.
+    #[test]
+    fn an_untitled_note_takes_the_templates_name_with_tokens_resolved() {
+        let (dir, mut store) = store_with(&[("Templates/Daily {{date}}.md", "body {{title}}")]);
+        let template = store.templates()[0].clone();
+
+        let note = store
+            .create_from_template("", &template, "2026-07-25", "9:30 AM")
+            .unwrap();
+
+        assert_eq!(note.title(), "Daily 2026-07-25");
+        assert_eq!(note.content(), "body Daily 2026-07-25");
+        assert!(dir.path().join("Daily 2026-07-25.md").exists());
     }
 
     #[test]
