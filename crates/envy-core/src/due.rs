@@ -68,7 +68,7 @@ fn next_date(weekday: Weekday, today: NaiveDate) -> NaiveDate {
 /// month range is still validated, exactly as `parseFlexibleDate` validates it.
 pub fn parse_flexible_date(input: &str) -> Option<NaiveDate> {
     let parts: Vec<&str> = input
-        .split(|c| c == '-' || c == '/')
+        .split(['-', '/'])
         .filter(|p| !p.is_empty())
         .collect();
     if parts.len() != 3 {

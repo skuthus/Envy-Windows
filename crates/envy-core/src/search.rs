@@ -247,7 +247,10 @@ fn due_condition_matches(c: DueCondition, note: &Note, today: NaiveDate) -> bool
     }
 }
 
-fn is_in_inbox_folder(note: &Note) -> bool {
+/// Membership is the folder the file sits in — there's no flag on a note
+/// saying it's fleeting, and there shouldn't be: moving one out of `Inbox/` in
+/// Explorer should file it just as surely as pressing Submit does.
+pub fn is_inbox_note(note: &Note) -> bool {
     note.url()
         .parent()
         .and_then(|p| p.file_name())
@@ -462,10 +465,10 @@ fn matched<'a>(notes: &'a [Note], group: &str, ctx: &SearchContext) -> Vec<(&'a 
             // note saying it's fleeting, and there shouldn't be: moving it out
             // of Inbox/ in Explorer should file it just as surely as pressing
             // Submit does.
-            if q.inbox_only && !is_in_inbox_folder(note) {
+            if q.inbox_only && !is_inbox_note(note) {
                 return None;
             }
-            if q.inbox_excluded && is_in_inbox_folder(note) {
+            if q.inbox_excluded && is_inbox_note(note) {
                 return None;
             }
             if let Some(link) = &q.link {

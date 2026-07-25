@@ -20,6 +20,10 @@ authors = ["Skyler Schoos"]
 # Index, and fidelity to the Mac behavior is worth more here than asymptotics.
 fancy-regex = "0.14"
 rayon = "1.10"
+# std::fs::canonicalize returns a \\?\ UNC path on Windows, which leaks into
+# every note id and shows up in error messages. dunce hands back the ordinary
+# form wherever one exists.
+dunce = "1"
 notify = "7"
 serde = { version = "1", features = ["derive"] }
 chrono = "0.4"

@@ -913,10 +913,12 @@ name = "envy-core"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dunce",
  "fancy-regex",
  "notify",
  "rayon",
  "serde",
+ "tempfile",
 ]
 
 [[package]]
