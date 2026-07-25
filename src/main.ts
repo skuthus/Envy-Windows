@@ -3,7 +3,13 @@ import { EditorState, Compartment } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { envyStyler, searchQueryField, setSearchQuery } from './styler'
+import {
+  embedHost,
+  envyStyler,
+  refreshEmbeds,
+  searchQueryField,
+  setSearchQuery,
+} from './styler'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 
 interface NoteDto {
@@ -63,6 +69,23 @@ const view = new EditorView({
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
       searchQueryField,
+      embedHost.of({
+        // Resolved by title on every mount rather than handed a pre-fetched
+        // note, so "the source was renamed" and "the source doesn't exist
+        // yet" both fall out of the ordinary lookup instead of each needing
+        // their own handling.
+        resolve: async (title) => {
+          const note = await invoke<NoteDto | null>('resolve_title', { title })
+          return note && note.content !== null
+            ? { id: note.id, title: note.title, content: note.content }
+            : null
+        },
+        save: async (id, content) => {
+          await invoke('save_note', { id, content })
+          await runSearch()
+        },
+        currentNoteId: () => openNoteId,
+      }),
       envyStyler,
       EditorView.domEventHandlers({
         mousedown: (event, v) => {
@@ -1274,6 +1297,10 @@ window.addEventListener('resize', () => view.requestMeasure())
 // typed into the search box.
 void listen('index-changed', async () => {
   await runSearch()
+  // The "always current" half of transclusion: a source note edited elsewhere
+  // should update where it's embedded, not keep showing what it looked like
+  // when the host note was opened.
+  refreshEmbeds()
   // Reload the open note too, unless there are unsaved keystrokes in flight —
   // overwriting the buffer someone is typing into is worse than showing them
   // a stale copy for another moment.

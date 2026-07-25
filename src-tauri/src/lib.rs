@@ -118,6 +118,19 @@ fn search(query: String, state: State<AppState>) -> Vec<NoteDto> {
         .collect()
 }
 
+/// Resolves a wiki-link title to a note, without creating one.
+///
+/// Separate from `open_link`, which creates on miss. An embed pointing at a
+/// note that doesn't exist should say so, not quietly bring one into being
+/// every time the host note is rendered.
+#[tauri::command]
+fn resolve_title(title: String, state: State<AppState>) -> Option<NoteDto> {
+    let store = state.store.lock().unwrap();
+    store
+        .exact_title_match(&title)
+        .map(|n| NoteDto::from_note(n, true))
+}
+
 #[tauri::command]
 fn read_note(id: String, state: State<AppState>) -> Option<NoteDto> {
     let store = state.store.lock().unwrap();
@@ -804,6 +817,7 @@ pub fn run() {
             index_directory,
             search,
             read_note,
+            resolve_title,
             save_note,
             create_note,
             open_link,

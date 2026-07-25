@@ -668,6 +668,36 @@ body.popover {
 }
 .envy-completed-task { color: var(--envy-completed-task); text-decoration: line-through; }
 
+/* --- Embeds ---------------------------------------------------------------
+   A left rule rather than a box. A border frames the embed as a component
+   sitting in the note; a rule marks where the other note's text starts and
+   stops without pretending it's a different kind of thing — which is the
+   point of transclusion. Blockquotes use the same device for the same reason:
+   a quote and a transclusion are both text from somewhere else.
+
+   The padding below is load-bearing, not spacing: the rule runs just past the
+   last line and stops, and that overhang is what marks the end of the
+   embedded note now that there's no box around it. */
+.envy-embed {
+  margin: 2px 0 6px;
+  padding-left: 14px;
+  padding-bottom: 10px;
+  border-left: 2px solid var(--envy-marker);
+}
+.envy-embed .cm-editor { background: transparent; }
+.envy-embed .cm-scroller { padding: 0; }
+.envy-embed .cm-focused { outline: none; }
+/* The embedded editor sizes to its own content — an embed is the note shown,
+   not a scrollable pane containing it. */
+.envy-embed .cm-content { padding: 0; }
+
+.envy-embed-message {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--envy-blockquote);
+  padding: 2px 0;
+}
+
 /* --- Search matches -------------------------------------------------------
    Layered over whatever styling the span already has — a match can land on
    bold text, a link, a tag or plain prose. The forced ink is why: without it a

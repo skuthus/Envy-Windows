@@ -1,6 +1,35 @@
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, WidgetType } from '@codemirror/view'
-import { Range, StateEffect, StateField } from '@codemirror/state'
+import { Compartment, EditorState, Facet, Range, StateEffect, StateField } from '@codemirror/state'
 import { resolveDueToken, urgencyFor } from './due'
+
+// --- Embeds -----------------------------------------------------------------
+
+export interface EmbedNote {
+  id: string
+  title: string
+  content: string
+}
+
+/// What an embed needs from the app to resolve and write a note. Supplied as a
+/// facet so the styler keeps knowing nothing about Tauri or the note store.
+export interface EmbedHost {
+  resolve(title: string): Promise<EmbedNote | null>
+  save(id: string, content: string): Promise<void>
+  /// The note the host editor is currently showing, for the self-embed guard.
+  currentNoteId(): string | null
+}
+
+export const embedHost = Facet.define<EmbedHost, EmbedHost | null>({
+  combine: (values) => values[0] ?? null,
+})
+
+/// Whether this editor renders embeds at all.
+///
+/// The editor *inside* an embed sets this false. Without it, a note embedding
+/// itself — or two notes embedding each other — would expand forever.
+export const allowEmbeds = Facet.define<boolean, boolean>({
+  combine: (values) => values[0] ?? true,
+})
 
 /// The live search query, pushed in from the search box so matches can be
 /// highlighted in the open note. Held in editor state rather than a module
@@ -76,6 +105,184 @@ class CheckboxWidget extends WidgetType {
   }
   ignoreEvent() {
     return false
+  }
+}
+
+/// Every embed currently on screen, so the app can refresh them when the
+/// source changes on disk. Widgets add themselves on mount and drop out on
+/// destroy.
+const mountedEmbeds = new Set<EmbedWidget>()
+
+/// Re-reads every visible embed from the store — the "always current" half of
+/// transclusion. An embed being edited is skipped, so a refresh can never yank
+/// text out from under someone mid-sentence.
+export function refreshEmbeds() {
+  for (const w of mountedEmbeds) void w.refresh()
+}
+
+function embedMessage(text: string): HTMLElement {
+  const p = document.createElement('div')
+  p.className = 'envy-embed-message'
+  p.textContent = text
+  return p
+}
+
+class EmbedWidget extends WidgetType {
+  private view: EditorView | null = null
+  private note: EmbedNote | null = null
+  private editable = false
+  private saveTimer: number | undefined
+  private lastSynced = ''
+  private body: HTMLElement | null = null
+  /// Its own compartment, not a shared one: a module-level compartment is a
+  /// single reconfigurable slot, so the first click into any embed would flip
+  /// every embed on screen to editable at once.
+  ///
+  /// A compartment rather than `StateEffect.appendConfig`, because
+  /// `EditorView.editable` resolves to the *first* value in the facet —
+  /// appending `true` after the initial `false` would change nothing, and
+  /// would do so silently.
+  private readonly editableComp = new Compartment()
+
+  constructor(
+    readonly title: string,
+    readonly host: EmbedHost | null,
+    readonly hostNoteId: string | null,
+  ) {
+    super()
+  }
+
+  /// Reuse hinges on this. Returning false on every rebuild would tear down
+  /// and recreate the nested editor on every keystroke in the host note,
+  /// losing its cursor, its scroll position, and any edit in flight.
+  eq(other: EmbedWidget) {
+    return other.title === this.title && other.hostNoteId === this.hostNoteId
+  }
+
+  /// Events belong to the nested editor, not the host. Without this the outer
+  /// view treats clicks inside the embed as clicks on an opaque widget and
+  /// moves its own cursor instead.
+  ignoreEvent() {
+    return true
+  }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    // A left rule rather than a box. A border frames the embed as a component
+    // sitting in the note; a rule marks where the other note's text starts and
+    // stops without pretending it's a different kind of thing — which is the
+    // point of transclusion. Same device markdown already uses for
+    // blockquotes.
+    wrap.className = 'envy-embed'
+    const body = document.createElement('div')
+    body.className = 'envy-embed-body'
+    wrap.append(body)
+    this.body = body
+    mountedEmbeds.add(this)
+    void this.mount(body)
+    return wrap
+  }
+
+  destroy() {
+    mountedEmbeds.delete(this)
+    window.clearTimeout(this.saveTimer)
+    this.view?.destroy()
+    this.view = null
+  }
+
+  private async mount(body: HTMLElement) {
+    if (!this.host) return
+    let note: EmbedNote | null = null
+    try {
+      note = await this.host.resolve(this.title)
+    } catch (e) {
+      // A lookup that fails outright is not the same as a note that isn't
+      // there, and silently leaving a bare rule on screen would be the worst
+      // of both — it reads as an empty note rather than a problem.
+      console.error(`could not resolve embed "${this.title}"`, e)
+      if (this.body === body) body.replaceChildren(embedMessage('Could not load this note'))
+      return
+    }
+    // The widget may have been torn down while the lookup was in flight.
+    if (this.body !== body) return
+
+    if (!note) {
+      body.replaceChildren(embedMessage('Note not found'))
+      return
+    }
+    // Rendering a second live, independently-editable copy of the buffer
+    // you're already typing in means two debounced saves racing, each
+    // silently discarding the other's work.
+    if (note.id === this.hostNoteId) {
+      body.replaceChildren(embedMessage('Already open above'))
+      return
+    }
+
+    this.note = note
+    this.lastSynced = note.content
+    body.replaceChildren()
+
+    this.view = new EditorView({
+      state: EditorState.create({
+        doc: note.content,
+        extensions: [
+          EditorView.lineWrapping,
+          searchQueryField,
+          // No embeds inside an embed — see `allowEmbeds`.
+          allowEmbeds.of(false),
+          envyStyler,
+          // Starts read-only and flips on first click, so scrolling past an
+          // embed while reading can never start typing into a different file.
+          this.editableComp.of(EditorView.editable.of(false)),
+          EditorView.updateListener.of((u) => {
+            if (u.docChanged && this.editable) this.scheduleSave()
+          }),
+        ],
+      }),
+      parent: body,
+    })
+
+    body.addEventListener('mousedown', () => {
+      if (this.editable || !this.view) return
+      this.editable = true
+      this.view.dispatch({
+        effects: this.editableComp.reconfigure(EditorView.editable.of(true)),
+      })
+      // The click that flipped it is already spent, so focus has to be given
+      // explicitly or the first click only ever arms the editor.
+      this.view.focus()
+    })
+  }
+
+  private scheduleSave() {
+    window.clearTimeout(this.saveTimer)
+    this.saveTimer = window.setTimeout(() => {
+      this.saveTimer = undefined
+      void this.commit()
+    }, 400)
+  }
+
+  private async commit() {
+    if (!this.host || !this.note || !this.view) return
+    const content = this.view.state.doc.toString()
+    if (content === this.lastSynced) return
+    await this.host.save(this.note.id, content)
+    this.lastSynced = content
+  }
+
+  /// Pull fresh content from the store, unless this embed is the one being
+  /// typed into.
+  async refresh() {
+    if (!this.host || !this.view || this.editable) return
+    const note = await this.host.resolve(this.title)
+    if (!note || !this.view) return
+    const current = this.view.state.doc.toString()
+    if (note.content === current) return
+    this.note = note
+    this.lastSynced = note.content
+    this.view.dispatch({
+      changes: { from: 0, to: this.view.state.doc.length, insert: note.content },
+    })
   }
 }
 
@@ -220,6 +427,12 @@ function searchMatchRanges(text: string, query: string): Array<[number, number]>
     addLiteral(token)
   }
   return out
+}
+
+/// The note a `[[…]]` body points at — alias and heading stripped. Mirrors
+/// `WikiLink::parse` in envy-core.
+function wikiLinkTarget(body: string): string {
+  return body.split('|')[0].split('#')[0].trim()
 }
 
 function buildDecorations(view: EditorView): DecorationSet {
@@ -438,7 +651,53 @@ function buildDecorations(view: EditorView): DecorationSet {
   )
 }
 
-export const envyStyler = ViewPlugin.fromClass(
+/// Embed widgets, as a StateField rather than part of the view plugin.
+///
+/// Not a stylistic choice: CodeMirror rejects block decorations supplied by a
+/// plugin outright ("Block decorations may not be specified via plugins"),
+/// because a block changes the document's line layout and the viewport is
+/// measured from that layout — a plugin that both reads the viewport and
+/// changes line heights would be defining its own input.
+///
+/// The practical consequence is that this scans the whole document rather than
+/// just the visible range. That's affordable here in a way it wouldn't be for
+/// the inline styling: embeds are rare, and the scan is one regex pass rather
+/// than the twenty-odd the styler runs.
+const embedDecorations = StateField.define<DecorationSet>({
+  create: (state) => buildEmbedDecorations(state),
+  update(value, tr) {
+    if (!tr.docChanged) return value.map(tr.changes)
+    return buildEmbedDecorations(tr.state)
+  },
+  provide: (f) => EditorView.decorations.from(f),
+})
+
+function buildEmbedDecorations(state: EditorState): DecorationSet {
+  if (!state.facet(allowEmbeds)) return Decoration.none
+  const host = state.facet(embedHost)
+  const hostNoteId = host?.currentNoteId() ?? null
+  const text = state.doc.toString()
+
+  const ranges: Range<Decoration>[] = []
+  for (const m of text.matchAll(P.embed)) {
+    const title = wikiLinkTarget(m[1])
+    if (!title) continue
+    // Placed after the whole line rather than at the match, so an embed
+    // mentioned mid-sentence doesn't cut the sentence in half. The `![[…]]`
+    // stays ordinary text, styled as a link.
+    const line = state.doc.lineAt(m.index!)
+    ranges.push(
+      Decoration.widget({
+        widget: new EmbedWidget(title, host, hostNoteId),
+        block: true,
+        side: 1,
+      }).range(line.to),
+    )
+  }
+  return Decoration.set(ranges, true)
+}
+
+const stylerPlugin = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet
     constructor(view: EditorView) {
@@ -459,3 +718,8 @@ export const envyStyler = ViewPlugin.fromClass(
   },
   { decorations: (v) => v.decorations },
 )
+
+/// The whole styling layer: inline marks from a view plugin (viewport-scoped,
+/// because that's where the cost is) and embed blocks from a state field
+/// (because CodeMirror requires it).
+export const envyStyler = [embedDecorations, stylerPlugin]
