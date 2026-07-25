@@ -493,6 +493,7 @@ pub fn scan_trashed_notes(directory: &Path) -> Vec<Note> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
     use tempfile::TempDir;
 
     fn store_with(files: &[(&str, &str)]) -> (TempDir, NoteStore) {
@@ -593,6 +594,38 @@ mod tests {
         store.save(&note).unwrap();
         assert_eq!(fs::read_to_string(dir.path().join("A.md")).unwrap(), "new");
         assert_eq!(store.notes()[0].content(), "new");
+    }
+
+    /// Every derived value is cached per `(url, content)` pair, so a save has
+    /// to leave the stored note with a *fresh* cache or the list keeps
+    /// reporting the old due date, tags and badges forever. Removing a due
+    /// token is the case that fails most visibly — the pill outlives the text
+    /// that justified it.
+    #[test]
+    fn saving_recomputes_derived_values() {
+        let (_d, mut store) = store_with(&[("A.md", "ship it @01-05-26 #alpha")]);
+        let jan5 = NaiveDate::from_ymd_opt(2026, 1, 5).unwrap();
+        assert_eq!(store.notes()[0].due(), Some(jan5));
+        assert!(store.notes()[0].tags().contains("alpha"));
+
+        // Change the date.
+        let mut note = store.notes()[0].clone();
+        note.set_content("ship it @02-09-26 #beta");
+        store.save(&note).unwrap();
+        assert_eq!(
+            store.notes()[0].due(),
+            Some(NaiveDate::from_ymd_opt(2026, 2, 9).unwrap())
+        );
+        assert!(store.notes()[0].tags().contains("beta"));
+        assert!(!store.notes()[0].tags().contains("alpha"));
+
+        // Remove it entirely.
+        let mut note = store.notes()[0].clone();
+        note.set_content("ship it, no date now");
+        store.save(&note).unwrap();
+        assert_eq!(store.notes()[0].due(), None);
+        assert_eq!(store.notes()[0].due_date_count(), 0);
+        assert!(store.notes()[0].tags().is_empty());
     }
 
     // --- Rename and link rewriting -----------------------------------------

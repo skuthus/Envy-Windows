@@ -222,10 +222,42 @@ function cancelPendingSave() {
 async function save() {
   if (!openNoteId) return
   try {
-    await invoke('save_note', { id: openNoteId, content: view.state.doc.toString() })
+    const saved = await invoke<NoteDto>('save_note', {
+      id: openNoteId,
+      content: view.state.doc.toString(),
+    })
+    applySavedNote(saved)
   } catch (e) {
     console.error('save failed', e)
   }
+}
+
+/// Folds a just-saved note's freshly derived values back into the list and the
+/// title bar. Adding, changing, or deleting an `@due` token changes the pill,
+/// the row, and possibly the sort position — none of which the watcher will
+/// report, since a write suppresses it on purpose.
+function applySavedNote(saved: NoteDto) {
+  const idx = results.findIndex((n) => n.id === saved.id)
+  if (idx >= 0) {
+    // Keep the content field: `results` entries carry it as null by design,
+    // and the row only reads derived values anyway.
+    results[idx] = { ...saved, content: null }
+  }
+  if (openNoteId === saved.id) renderDueBadge(saved.due)
+  // Re-render so a changed due date or modified time moves the row under the
+  // current sort. The open note keeps the highlight across the reorder.
+  const keepId = results[highlighted]?.id ?? openNoteId
+  renderList()
+  const moved = results.findIndex((n) => n.id === keepId)
+  if (moved >= 0 && moved !== highlighted) {
+    highlighted = moved
+    renderList()
+  }
+}
+
+function renderDueBadge(due: string | null) {
+  dueEl.textContent = due ? formatDue(due) : ''
+  dueEl.className = due ? `envy-due-${dueUrgencyClass(due)}` : ''
 }
 
 function dueUrgencyClass(iso: string): string {
@@ -462,8 +494,7 @@ async function openNote(id: string) {
   if (!note) return
   openNoteId = note.id
   titleEl.value = note.title
-  dueEl.textContent = note.due ? formatDue(note.due) : ''
-  dueEl.className = note.due ? `envy-due-${dueUrgencyClass(note.due)}` : ''
+  renderDueBadge(note.due)
   emptyEl.classList.add('hidden')
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: note.content ?? '' },
@@ -663,6 +694,10 @@ function syncTheme() {
   // switch — no light-mode stylesheet to keep in step.
   const dark = settings.theme === 'system' ? darkQuery.matches : settings.theme === 'dark'
   applyTheme(dark ? enviousDark : enviousLight)
+  // Without this the engine paints *native* controls for a light page —
+  // scrollbars, selects, checkboxes — regardless of what the CSS says, which
+  // is why the scrollbars came out white on a dark editor.
+  document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
 }
 darkQuery.addEventListener('change', syncTheme)
 

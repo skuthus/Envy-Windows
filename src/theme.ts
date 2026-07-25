@@ -11,7 +11,22 @@
 // actually letting through. Preserved here for the same reason: Mica/Acrylic
 // on Win11 is exactly the same problem.
 
+/// The Windows counterpart to the Mac theme's "SF Pro Text" default: the
+/// system UI face, not a monospace one. Segoe UI Variable is Windows 11's;
+/// Segoe UI is the Windows 10 fallback, and `system-ui` covers anything else.
+///
+/// Note text uses this. Code spans and fenced blocks deliberately do not — a
+/// backtick means "this is literal", and proportional code is harder to read
+/// for exactly the reasons monospace exists.
+export const SYSTEM_UI_FONT =
+  "'Segoe UI Variable Text', 'Segoe UI', system-ui, -apple-system, sans-serif"
+export const MONO_FONT = "'Cascadia Code', 'Consolas', ui-monospace, monospace"
+
 export interface EnvyTheme {
+  /// Font is part of the theme on the Mac (`Theme.fontName` / `fontSize`) and
+  /// applies to both faces — unlike colors, it isn't a light/dark concern.
+  fontFamily: string
+  fontSize: string
   text: string
   background: string
   marker: string
@@ -43,6 +58,11 @@ export interface EnvyTheme {
 }
 
 export const enviousDark: EnvyTheme = {
+  fontFamily: SYSTEM_UI_FONT,
+  // 15px rather than the Mac's 13: Segoe UI has a smaller x-height than SF Pro
+  // Text, so matching the number would read noticeably smaller than Envy does
+  // on a Mac.
+  fontSize: '15px',
   text: 'rgba(255, 255, 255, 0.847)',
   background: 'rgb(29, 30, 31)',
   marker: 'rgba(255, 255, 255, 0.247)',
@@ -72,6 +92,8 @@ export const enviousDark: EnvyTheme = {
 // them; on paper, dark text on solid blue or red is unreadable, so both become
 // tints.
 export const enviousLight: EnvyTheme = {
+  fontFamily: SYSTEM_UI_FONT,
+  fontSize: '15px',
   text: 'rgba(0, 0, 0, 0.85)',
   background: 'rgb(250, 250, 248)',
   marker: 'rgba(0, 0, 0, 0.30)',

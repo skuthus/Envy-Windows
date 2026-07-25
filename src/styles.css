@@ -5,6 +5,35 @@
 
 * { box-sizing: border-box; }
 
+/* --- Scrollbars ------------------------------------------------------------
+   Overlay-style: the track is always invisible and the thumb only appears
+   while the pointer is over the pane it belongs to, so a scrollbar never sits
+   there as permanent furniture beside the text. Colours come from the theme,
+   so this follows light/dark with everything else.
+
+   `color-scheme` is set on <html> from the theme too (see syncTheme) — without
+   it the engine paints native light-mode controls whatever the CSS says. */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 999px;
+  /* Transparent border + content-box clip insets the thumb from the edge so
+     it reads as a floating pill rather than a full-width bar. */
+  border: 3px solid transparent;
+  background-clip: content-box;
+  transition: background 140ms ease;
+}
+:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--envy-marker) 85%, transparent);
+  background-clip: content-box;
+}
+:hover::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--envy-text) 45%, transparent);
+  background-clip: content-box;
+}
+
 html, body {
   margin: 0;
   height: 100%;
@@ -329,10 +358,13 @@ html, body {
 
 .cm-editor { background: var(--envy-background); height: 100%; }
 .cm-editor.cm-focused { outline: none; }
+/* Note text is the system UI face, matching the Mac theme's "SF Pro Text"
+   default. Both come from the theme, so the customization settings can drive
+   them later without touching this file. */
 .cm-scroller {
-  font-family: 'Cascadia Code', 'Consolas', ui-monospace, monospace;
-  font-size: 14px;
-  line-height: 1.65;
+  font-family: var(--envy-font-family);
+  font-size: var(--envy-font-size);
+  line-height: 1.6;
   padding: 20px 28px 40vh;
 }
 /* CodeMirror injects its own stylesheet at runtime, *after* this file, so a
@@ -380,15 +412,16 @@ html, body {
 .envy-strike { text-decoration: line-through; color: var(--envy-completed-task); }
 
 /* --- Code ---------------------------------------------------------------- */
-.envy-code {
+/* Code keeps a monospace face even though note text doesn't — a backtick means
+   "this is literal", which is exactly what monospace is for. Slightly smaller
+   because monospace faces run visually larger at the same px. */
+.envy-code, .envy-code-block {
+  font-family: 'Cascadia Code', 'Consolas', ui-monospace, monospace;
+  font-size: 0.92em;
   background: var(--envy-code-background);
-  border-radius: 4px;
-  padding: 1px 3px;
 }
-.envy-code-block {
-  background: var(--envy-code-background);
-  border-radius: 6px;
-}
+.envy-code { border-radius: 4px; padding: 1px 3px; }
+.envy-code-block { border-radius: 6px; }
 
 /* --- Links --------------------------------------------------------------- */
 .envy-link, .envy-wikilink { color: var(--envy-link); }

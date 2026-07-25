@@ -118,15 +118,31 @@ fn read_note(id: String, state: State<AppState>) -> Option<NoteDto> {
         .map(|n| NoteDto::from_note(n, true))
 }
 
+/// Returns the saved note as the store now sees it.
+///
+/// Returning it rather than `()` is what keeps the list and the due pill
+/// honest. Everything the UI shows about a note besides its text — the due
+/// date and its urgency, the tags, the AI badge, whether it still has an
+/// unchecked task — is derived from the content that was just written, and a
+/// save is the one moment all of it can change at once. The watcher can't
+/// cover this: writing suppresses it precisely so a reload can't land on top
+/// of someone's typing, so the write that changes a due date is exactly the
+/// write the watcher is deaf to.
 #[tauri::command]
-fn save_note(id: String, content: String, state: State<AppState>) -> Result<(), String> {
+fn save_note(id: String, content: String, state: State<AppState>) -> Result<NoteDto, String> {
     state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
     let Some(mut note) = store.notes().iter().find(|n| n.id() == id).cloned() else {
         return Err(format!("no note with id {id}"));
     };
     note.set_content(content);
-    store.save(&note).map_err(|e| e.to_string())
+    store.save(&note).map_err(|e| e.to_string())?;
+    store
+        .notes()
+        .iter()
+        .find(|n| n.id() == id)
+        .map(|n| NoteDto::from_note(n, false))
+        .ok_or_else(|| format!("note {id} vanished during save"))
 }
 
 #[tauri::command]
