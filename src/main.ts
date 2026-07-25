@@ -1764,7 +1764,6 @@ el('setting-change-index').onclick = async () => {
     includeSubfolders: settings.includeSubfolders,
   })
   el('settings-index-path').textContent = picked
-  searchInput.placeholder = `Search ${picked}…`
   closeEditor()
   searchInput.value = ''
   await runSearch()
@@ -1844,8 +1843,10 @@ async function boot() {
   // The backend keeps the tray pin only in memory, so hand it back the value
   // that survived the restart.
   if (trayPinnedId) await invoke('set_pinned_note', { id: trayPinnedId })
+  // The placeholder stays "Search or Create Note" — the Index path belongs in
+  // Settings, where it can be changed. Repeating it in the box a person looks
+  // at all day is noise about something that never varies.
   const dir = await invoke<string>('index_directory')
-  searchInput.placeholder = `Search ${dir}…`
   el('settings-index-path').textContent = dir
   if (settings.includeSubfolders) {
     await invoke('set_include_subfolders', { include: true })
