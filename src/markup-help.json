@@ -1,0 +1,189 @@
+[
+ {
+  "title": "Headings & Emphasis",
+  "entries": [
+   {
+    "syntax": "# Heading",
+    "description": "Larger, bold heading text. Use up to six #'s for smaller heading levels."
+   },
+   {
+    "syntax": "**bold**",
+    "description": "Bold text — select text and press Cmd+B to wrap or unwrap it"
+   },
+   {
+    "syntax": "*italic*",
+    "description": "Italic text — select text and press Cmd+I to wrap or unwrap it"
+   },
+   {
+    "syntax": "***bold italic***",
+    "description": "Bold and italic together"
+   },
+   {
+    "syntax": "~~strikethrough~~",
+    "description": "Strikethrough text"
+   }
+  ]
+ },
+ {
+  "title": "Code",
+  "entries": [
+   {
+    "syntax": "`code`",
+    "description": "Inline code with a subtle background"
+   },
+   {
+    "syntax": "```\ncode block\n```",
+    "description": "Fenced code block — monospaced, and markdown syntax inside it is left alone"
+   }
+  ]
+ },
+ {
+  "title": "Structure",
+  "entries": [
+   {
+    "syntax": "> quote",
+    "description": "Blockquote — indented and italic"
+   },
+   {
+    "syntax": "---",
+    "description": "Horizontal rule"
+   }
+  ]
+ },
+ {
+  "title": "Lists",
+  "entries": [
+   {
+    "syntax": "- item",
+    "description": "Bullet list (\"-\", \"*\", or \"+\" — \"*\" renders as an actual bullet)"
+   },
+   {
+    "syntax": "1. item",
+    "description": "Numbered list — stays sequential automatically as you add or remove items"
+   },
+   {
+    "syntax": "- [ ] task",
+    "description": "Task list with a clickable checkbox — \"- [x]\" for checked"
+   }
+  ]
+ },
+ {
+  "title": "Links",
+  "entries": [
+   {
+    "syntax": "[[Note Title]]",
+    "description": "Link to another note. Cmd+Click to open it — creates the note if it doesn't exist yet. Option+Click instead to preview it without leaving where you are (Settings → General to change or turn off)."
+   },
+   {
+    "syntax": "[[Note Title|any words]]",
+    "description": "Same link, shown as your own words instead of the note's name — so a link can sit inside a sentence without the filename interrupting it. Rename the note and your wording stays. Click inside a link you're already in to put the cursor there and edit it."
+   },
+   {
+    "syntax": "[[Note Title#Heading]]",
+    "description": "Links to the note. Envy doesn't jump to the heading yet, but the reference is kept as written, so notes brought over from other apps stay linked."
+   },
+   {
+    "syntax": "[text](url)",
+    "description": "Link to a web address. Cmd+Click to open in your browser."
+   },
+   {
+    "syntax": "<https://…>",
+    "description": "Autolink — bare URLs are also detected and made clickable automatically"
+   },
+   {
+    "syntax": "[text](#heading)",
+    "description": "Jump to a heading in this note — click, no modifier needed. Matches the heading's text lowercased with spaces turned into hyphens."
+   },
+   {
+    "syntax": "![[Note Title]]",
+    "description": "Embed another note's live content inline — on its own line, followed by a blank line. The marker stays visible above as an ordinary link; edit or delete it to change or remove the embed. The embedded note is marked by a rule down its left edge, like a blockquote. Click into it to edit that note directly; edits save to it, not this note. Starts read-only so scrolling past it can't accidentally start typing into a different note."
+   }
+  ]
+ },
+ {
+  "title": "Fleeting Notes",
+  "entries": [
+   {
+    "syntax": "inbox:",
+    "description": "Show the fleeting notes waiting in your Inbox — captures you haven't filed yet. They're ordinary notes living in an Inbox folder inside The Index, marked in the list with an amber dot, and the count beside the search box says how many are waiting (click it to review, click again to come back)."
+   },
+   {
+    "syntax": "inbox: any words",
+    "description": "Captures a fleeting note with that title, without leaving where you are. If a fleeting note by that name already exists it opens instead, the same rule the search box follows."
+   },
+   {
+    "syntax": "-inbox:",
+    "description": "Hide fleeting notes from a search."
+   }
+  ]
+ },
+ {
+  "title": "Footnotes",
+  "entries": [
+   {
+    "syntax": "text[^1]",
+    "description": "Footnote reference — click it to jump straight to its definition"
+   },
+   {
+    "syntax": "[^1]: explanation",
+    "description": "The footnote's definition. Can live anywhere in the note, though the bottom is the usual spot."
+   }
+  ]
+ },
+ {
+  "title": "Tags",
+  "entries": [
+   {
+    "syntax": "#tag",
+    "description": "Tag — rendered bold with a tinted background. Search \"tag:name\" to find every note tagged that way, including partial matches."
+   }
+  ]
+ },
+ {
+  "title": "Due Dates",
+  "entries": [
+   {
+    "syntax": "@04-16-26",
+    "description": "Due date — also accepts \"@2026-04-16\". Shows as a colored pill (urgency-tinted) in the editor, title bar, and note list. Search \"due:today\", \"due:overdue\", \"due:week\", an exact date, or a bare \"due:\" for any due date at all. Sort the note list by it from the column headers."
+   },
+   {
+    "syntax": "@today",
+    "description": "Due today, literally. \"@tomorrow\" and \"@yesterday\" work the same way."
+   },
+   {
+    "syntax": "@monday",
+    "description": "A day name instead of a date — always the next occurrence of that day, even if today already is one. Any day of the week works. It's converted to that actual date the moment you finish typing it, so it stays put and goes overdue when the day passes rather than sliding to the following week."
+   },
+   {
+    "syntax": "click a due date",
+    "description": "Toggles it crossed out — a crossed-out due date no longer shows a pill or matches \"due:\" searches. Click again to restore it. Checking off a task-list box whose text contains a due date does this automatically."
+   }
+  ]
+ },
+ {
+  "title": "Emoji",
+  "entries": [
+   {
+    "syntax": ":smile:",
+    "description": "Replaced with 😄 as soon as you finish typing it — the note just contains the emoji itself"
+   }
+  ]
+ },
+ {
+  "title": "Ligatures",
+  "entries": [
+   {
+    "syntax": "->",
+    "description": "Replaced with → as soon as you finish typing it — same instant-expansion as emoji shortcodes. Skipped inside code."
+   },
+   {
+    "syntax": "<-",
+    "description": "Replaced with ←"
+   },
+   {
+    "syntax": "=>",
+    "description": "Replaced with ⇒"
+   }
+  ]
+ }
+]

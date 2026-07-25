@@ -27,6 +27,7 @@ import {
 } from './input'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 import { createMiniNoteEditor, type MiniNoteEditor } from './mininote'
+import { renderReference, type ReferenceTab } from './reference'
 
 interface NoteDto {
   id: string
@@ -2014,6 +2015,52 @@ function syncTheme() {
 }
 darkQuery.addEventListener('change', syncTheme)
 
+// --- Reference sheets --------------------------------------------------------
+// Markup, Shortcuts, Emoji and About. On the Mac these are separate windows off
+// the menu bar; here they share one overlay with tabs, so there is one way in
+// and nothing permanently occupying the window.
+
+const referenceEl = document.getElementById('reference')!
+const referenceTabsEl = document.getElementById('reference-tabs')!
+const referenceContentEl = document.getElementById('reference-content')!
+
+const REFERENCE_TABS: Array<[ReferenceTab, string]> = [
+  ['markup', 'Markup'],
+  ['shortcuts', 'Shortcuts'],
+  ['emoji', 'Emoji'],
+  ['about', 'About'],
+]
+
+let appVersion = '0.1.0'
+
+function openReference(tab: ReferenceTab) {
+  referenceTabsEl.replaceChildren(
+    ...REFERENCE_TABS.map(([id, label]) => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'reference-tab' + (id === tab ? ' active' : '')
+      b.textContent = label
+      b.onclick = () => openReference(id)
+      return b
+    }),
+  )
+  referenceContentEl.replaceChildren(renderReference(tab, appVersion))
+  referenceContentEl.scrollTop = 0
+  referenceEl.classList.remove('hidden')
+}
+
+function closeReference() {
+  referenceEl.classList.add('hidden')
+}
+
+document.getElementById('reference-close')!.onclick = closeReference
+referenceEl.onclick = (e) => {
+  if (e.target === referenceEl) closeReference()
+}
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !referenceEl.classList.contains('hidden')) closeReference()
+})
+
 // --- Settings panel ---------------------------------------------------------
 
 const settingsEl = document.getElementById('settings')!
@@ -2171,6 +2218,11 @@ el<HTMLInputElement>('setting-template-date').oninput = () => {
   updateTemplateDatePreview()
   void invoke('set_template_date_format', { pattern: settings.templateDateFormat })
 }
+
+el('open-markup').onclick = () => openReference('markup')
+el('open-shortcuts').onclick = () => openReference('shortcuts')
+el('open-emoji').onclick = () => openReference('emoji')
+el('open-about').onclick = () => openReference('about')
 
 el('setting-reveal-templates').onclick = () => void invoke('reveal_folder', { which: 'templates' })
 el('setting-reveal-trash').onclick = () => void invoke('reveal_folder', { which: 'trash' })

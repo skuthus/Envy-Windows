@@ -593,6 +593,150 @@ body.popover {
   color: var(--envy-due-overdue);
 }
 
+/* --- Reference sheets ------------------------------------------------------- */
+
+#reference {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 30;
+}
+#reference.hidden { display: none; }
+#reference-panel {
+  width: min(560px, 92vw);
+  height: min(620px, 88vh);
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  background: var(--envy-title-bar-background);
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 45%, transparent);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+#reference-panel header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 35%, transparent);
+}
+#reference-tabs { display: flex; gap: 4px; flex: 1; }
+.reference-tab {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--envy-blockquote);
+  cursor: default;
+}
+.reference-tab:hover { background: color-mix(in srgb, var(--envy-marker) 20%, transparent); }
+.reference-tab.active { background: var(--envy-selection); color: var(--envy-text); }
+#reference-close {
+  font: inherit;
+  font-size: 14px;
+  border: none;
+  background: none;
+  color: var(--envy-blockquote);
+  cursor: default;
+}
+#reference-content { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 18px 20px; }
+
+.reference-group {
+  margin: 16px 0 6px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--envy-blockquote);
+}
+.reference-group:first-child { margin-top: 0; }
+.reference-table {
+  display: grid;
+  grid-template-columns: minmax(90px, max-content) 1fr;
+  gap: 5px 14px;
+  align-items: baseline;
+}
+.reference-syntax {
+  font-family: 'Cascadia Code', Consolas, ui-monospace, monospace;
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--envy-code-background);
+  color: var(--envy-text);
+  white-space: pre-wrap;
+}
+.reference-desc { font-size: 12.5px; line-height: 1.5; color: var(--envy-blockquote); }
+
+.reference-search {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  margin: 8px 0 12px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: var(--envy-background);
+  color: var(--envy-text);
+}
+.emoji-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 2px;
+}
+.emoji-cell {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  font-size: 12px;
+  cursor: default;
+}
+.emoji-cell:hover { background: color-mix(in srgb, var(--envy-marker) 20%, transparent); }
+.emoji-glyph { font-size: 16px; }
+.emoji-cell code { color: var(--envy-blockquote); }
+
+.reference-body.about { text-align: center; padding-top: 26px; }
+.reference-body.about h3 { margin: 12px 0 4px; font-size: 17px; }
+.reference-body.about .reference-desc { margin: 2px 0; }
+/* The app mark, drawn from the same five flat shapes as the icon rather than
+   loaded as an image — one source of geometry, and it scales cleanly. */
+.about-mark {
+  width: 88px;
+  height: 88px;
+  margin: 0 auto;
+  border-radius: 22.37%;
+  background: #282520;
+  position: relative;
+  overflow: hidden;
+}
+.about-mark::before {
+  content: '';
+  position: absolute;
+  left: 7.8%;
+  right: 7.8%;
+  top: 18%;
+  height: 22%;
+  border-radius: 50%;
+  border-top: 11% solid #ff4b39;
+}
+.about-mark::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 56.6%;
+  width: 27.3%;
+  height: 27.3%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: #30d158;
+  box-shadow: 0 0 0 0.6em #fafaf8 inset, 0 0 0 3.2em rgba(0, 0, 0, 0) inset;
+}
+
 /* --- Settings --------------------------------------------------------------- */
 
 #settings {

@@ -91,6 +91,16 @@
         <div id="link-preview-body"></div>
       </div>
 
+      <div id="reference" class="hidden" role="dialog" aria-label="Reference">
+        <div id="reference-panel">
+          <header>
+            <div id="reference-tabs"></div>
+            <button id="reference-close" type="button" aria-label="Close">✕</button>
+          </header>
+          <div id="reference-content"></div>
+        </div>
+      </div>
+
       <div id="settings" class="hidden" role="dialog" aria-label="Settings">
         <div id="settings-panel">
           <header>
@@ -223,6 +233,18 @@
               <input type="checkbox" id="setting-show-interlinks" />
               Show interlinks in footer
             </label>
+          </section>
+
+          <section>
+            <h3>Reference</h3>
+            <div class="setting-row">
+              <button id="open-markup" type="button">Markup Commands…</button>
+              <button id="open-shortcuts" type="button">Keyboard Shortcuts…</button>
+            </div>
+            <div class="setting-row">
+              <button id="open-emoji" type="button">Emoji Shortcodes…</button>
+              <button id="open-about" type="button">About Envy…</button>
+            </div>
           </section>
 
           <section>
