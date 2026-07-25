@@ -1,5 +1,6 @@
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, WidgetType } from '@codemirror/view'
-import { Compartment, EditorState, Facet, Range, StateEffect, StateField } from '@codemirror/state'
+import { EditorState, Facet, Range, StateEffect, StateField } from '@codemirror/state'
+import { createMiniNoteEditor, type MiniNoteEditor } from './mininote'
 import { resolveDueToken, urgencyFor } from './due'
 
 // --- Embeds -----------------------------------------------------------------
@@ -187,21 +188,8 @@ function embedMessage(text: string): HTMLElement {
 }
 
 class EmbedWidget extends WidgetType {
-  private view: EditorView | null = null
-  private note: EmbedNote | null = null
-  private editable = false
-  private saveTimer: number | undefined
-  private lastSynced = ''
+  private editor: MiniNoteEditor | null = null
   private body: HTMLElement | null = null
-  /// Its own compartment, not a shared one: a module-level compartment is a
-  /// single reconfigurable slot, so the first click into any embed would flip
-  /// every embed on screen to editable at once.
-  ///
-  /// A compartment rather than `StateEffect.appendConfig`, because
-  /// `EditorView.editable` resolves to the *first* value in the facet —
-  /// appending `true` after the initial `false` would change nothing, and
-  /// would do so silently.
-  private readonly editableComp = new Compartment()
 
   constructor(
     readonly title: string,
@@ -244,9 +232,8 @@ class EmbedWidget extends WidgetType {
 
   destroy() {
     mountedEmbeds.delete(this)
-    window.clearTimeout(this.saveTimer)
-    this.view?.destroy()
-    this.view = null
+    this.editor?.destroy()
+    this.editor = null
   }
 
   private async mount(body: HTMLElement) {
@@ -277,71 +264,22 @@ class EmbedWidget extends WidgetType {
       return
     }
 
-    this.note = note
-    this.lastSynced = note.content
     body.replaceChildren()
-
-    this.view = new EditorView({
-      state: EditorState.create({
-        doc: note.content,
-        extensions: [
-          EditorView.lineWrapping,
-          searchQueryField,
-          // No embeds inside an embed — see `allowEmbeds`.
-          allowEmbeds.of(false),
-          envyStyler,
-          // Starts read-only and flips on first click, so scrolling past an
-          // embed while reading can never start typing into a different file.
-          this.editableComp.of(EditorView.editable.of(false)),
-          EditorView.updateListener.of((u) => {
-            if (u.docChanged && this.editable) this.scheduleSave()
-          }),
-        ],
-      }),
-      parent: body,
-    })
-
-    body.addEventListener('mousedown', () => {
-      if (this.editable || !this.view) return
-      this.editable = true
-      this.view.dispatch({
-        effects: this.editableComp.reconfigure(EditorView.editable.of(true)),
-      })
-      // The click that flipped it is already spent, so focus has to be given
-      // explicitly or the first click only ever arms the editor.
-      this.view.focus()
-    })
-  }
-
-  private scheduleSave() {
-    window.clearTimeout(this.saveTimer)
-    this.saveTimer = window.setTimeout(() => {
-      this.saveTimer = undefined
-      void this.commit()
-    }, 400)
-  }
-
-  private async commit() {
-    if (!this.host || !this.note || !this.view) return
-    const content = this.view.state.doc.toString()
-    if (content === this.lastSynced) return
-    await this.host.save(this.note.id, content)
-    this.lastSynced = content
+    // The same editor the link preview uses — one code path for "show another
+    // note's content and let me click into it".
+    const host = this.host
+    this.editor = createMiniNoteEditor(body, note, (id, content) => host.save(id, content))
   }
 
   /// Pull fresh content from the store, unless this embed is the one being
   /// typed into.
   async refresh() {
-    if (!this.host || !this.view || this.editable) return
+    const editor = this.editor
+    if (!this.host || !editor || editor.isEditable()) return
     const note = await this.host.resolve(this.title)
-    if (!note || !this.view) return
-    const current = this.view.state.doc.toString()
-    if (note.content === current) return
-    this.note = note
-    this.lastSynced = note.content
-    this.view.dispatch({
-      changes: { from: 0, to: this.view.state.doc.length, insert: note.content },
-    })
+    if (!note || this.editor !== editor) return
+    if (note.content === editor.view.state.doc.toString()) return
+    editor.setContent(note.content)
   }
 }
 

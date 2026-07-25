@@ -891,14 +891,16 @@ body.popover {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  margin: 0;
-  padding: 10px 12px;
-  font-family: var(--envy-font-family);
-  font-size: 13px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--envy-text);
+  padding: 8px 12px;
+  background: var(--envy-background);
+}
+#link-preview-body .cm-editor { background: transparent; }
+#link-preview-body .cm-scroller { padding: 0; }
+#link-preview-body .cm-focused { outline: none; }
+.link-preview-message {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--envy-blockquote);
 }
 
 /* --- Footnotes / rules --------------------------------------------------- */

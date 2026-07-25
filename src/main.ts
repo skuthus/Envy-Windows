@@ -26,6 +26,7 @@ import {
   toggleDueToken,
 } from './input'
 import { applyTheme, enviousDark, enviousLight } from './theme'
+import { createMiniNoteEditor, type MiniNoteEditor } from './mininote'
 
 interface NoteDto {
   id: string
@@ -841,16 +842,46 @@ const linkPreviewEl = document.getElementById('link-preview')!
 const linkPreviewTitleEl = document.getElementById('link-preview-title')!
 const linkPreviewBodyEl = document.getElementById('link-preview-body')!
 
+/// The preview's own editor, torn down each time it closes.
+///
+/// Not a persistent one reused across previews: it holds a note id and a
+/// pending save, and carrying either into a preview of a *different* note is
+/// how one note's edit lands in another's file.
+let previewEditor: MiniNoteEditor | null = null
+
 function hideLinkPreview() {
   linkPreviewEl.classList.add('hidden')
+  const editor = previewEditor
+  previewEditor = null
+  if (editor) {
+    void editor.flush().finally(() => editor.destroy())
+  }
 }
 
 async function showLinkPreview(target: string, x: number, y: number) {
+  hideLinkPreview()
   const note = await invoke<NoteDto | null>('resolve_title', { title: target })
   linkPreviewTitleEl.textContent = note ? note.title : target
-  linkPreviewBodyEl.textContent = note
-    ? (note.content ?? '')
-    : "This note doesn't exist yet. Ctrl-click the link to create it."
+  linkPreviewBodyEl.replaceChildren()
+
+  if (note && note.content !== null) {
+    // A live editor rather than rendered text: the same code path the embeds
+    // use, so a previewed note styles and behaves exactly as it does in the
+    // main editor, and can be corrected on the spot without opening it.
+    previewEditor = createMiniNoteEditor(
+      linkPreviewBodyEl,
+      { id: note.id, title: note.title, content: note.content },
+      async (id, content) => {
+        await invoke('save_note', { id, content })
+        await runSearch()
+      },
+    )
+  } else {
+    const msg = document.createElement('div')
+    msg.className = 'link-preview-message'
+    msg.textContent = "This note doesn't exist yet. Ctrl-click the link to create it."
+    linkPreviewBodyEl.append(msg)
+  }
   linkPreviewEl.classList.remove('hidden')
 
   // Placed after it has a size, and flipped rather than allowed off-screen.
@@ -961,7 +992,9 @@ document.getElementById('fleeting-submit')!.onclick = async () => {
   const id = openNoteId
   cancelPendingSave()
   await save()
-  await invoke('submit_from_inbox', { id })
+  const filed = await invoke<NoteDto>('submit_from_inbox', { id })
+  // Filing moves the file out of Inbox/, so the id changes.
+  migratePin(id, filed.id)
   await moveToNextFleeting(id)
 }
 
@@ -1040,7 +1073,8 @@ function trashMenuItems(note: NoteDto): MenuItemSpec[] {
 }
 
 async function restoreTrashed(note: NoteDto) {
-  await invoke('restore_from_trash', { id: note.id })
+  const restored = await invoke<NoteDto>('restore_from_trash', { id: note.id })
+  migratePin(note.id, restored.id)
   await runSearch()
 }
 
@@ -1309,6 +1343,8 @@ function noteMenuItems(note: NoteDto): MenuItemSpec[] {
       label: 'Make This Note a Template',
       run: async () => {
         await invoke('convert_to_template', { id: note.id })
+        // It stops being a note at all, so the pin goes rather than moves.
+        migratePin(note.id, null)
         if (openNoteId === note.id) closeEditor()
         await runSearch()
       },
@@ -1343,6 +1379,28 @@ const pinnedIds = new Set<string>(
 
 function persistPins() {
   localStorage.setItem('pinnedIds', JSON.stringify([...pinnedIds]))
+}
+
+/// Moves a pin when a note's id changes out from under it.
+///
+/// A note's id is its file path, so anything that moves the file — a rename,
+/// filing a fleeting note, restoring from trash — mints a new id and would
+/// silently drop the pin. Losing a pin because you corrected a typo in a title
+/// is the kind of small betrayal that stops people trusting the feature.
+///
+/// Passing `null` as the new id drops the pin instead, for when the note stops
+/// being a note at all (becoming a template).
+export function migratePin(oldId: string, newId: string | null) {
+  if (pinnedIds.delete(oldId)) {
+    if (newId) pinnedIds.add(newId)
+    persistPins()
+  }
+  if (trayPinnedId === oldId) {
+    trayPinnedId = newId
+    if (newId) localStorage.setItem('trayPinnedId', newId)
+    else localStorage.removeItem('trayPinnedId')
+    void invoke('set_pinned_note', { id: newId })
+  }
 }
 
 /// Pinned notes first, each group keeping the order the sort produced.
@@ -1579,6 +1637,8 @@ async function commitRename() {
   }
   try {
     const renamed = await invoke<NoteDto>('rename_note', { id: openNoteId, title: next })
+    // The file moved, so its id did too — carry any pin across with it.
+    migratePin(openNoteId, renamed.id)
     openNoteId = renamed.id
     // The sanitizer may have changed what was typed — a title Windows can't
     // represent as a filename comes back altered, and showing the typed text
