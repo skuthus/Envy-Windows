@@ -44,6 +44,7 @@
               aria-label="Note title"
               title="Click to rename. Links to this note are updated."
             />
+            <span id="note-tags"></span>
             <span id="note-due"></span>
           </div>
           <div id="editor"></div>
@@ -85,31 +86,111 @@
           <section>
             <h3>The Index</h3>
             <p class="setting-path" id="settings-index-path"></p>
-            <button id="settings-open-folder" type="button">Show in Explorer</button>
+            <div class="setting-row">
+              <button id="setting-change-index" type="button">Change Location…</button>
+              <button id="settings-open-folder" type="button">Reveal in Explorer</button>
+            </div>
             <label>
               <input type="checkbox" id="setting-subfolders" />
-              Include subfolders
+              Show items in subfolders
+            </label>
+          </section>
+
+          <section>
+            <h3>Templates</h3>
+            <label>
+              Date format
+              <input type="text" id="setting-template-date" spellcheck="false" />
+            </label>
+            <p class="setting-note" id="setting-template-date-preview"></p>
+            <button id="setting-reveal-templates" type="button">
+              Reveal Templates Folder
+            </button>
+          </section>
+
+          <section>
+            <h3>Trash</h3>
+            <label>
+              Empty items older than
+              <select id="setting-trash-age">
+                <option value="0">Never</option>
+                <option value="7">7 days</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+              </select>
             </label>
             <p class="setting-note">
-              Deleted notes go to a hidden <code>.trash</code> folder beside
-              them. Type <code>trash:</code> to browse or restore them.
+              Swept when Envy starts, not on a timer — a note app isn't
+              reliably running when a timer would fire.
             </p>
-            <button id="setting-empty-trash" type="button">Empty Trash…</button>
+            <div class="setting-row">
+              <button id="setting-reveal-trash" type="button">Reveal Trash Folder</button>
+              <button id="setting-empty-trash" type="button" class="destructive">
+                Empty Trash…
+              </button>
+            </div>
           </section>
 
           <section>
             <h3>Note list</h3>
             <label>
+              <input type="checkbox" id="setting-focus-editor" />
+              Move cursor to editor after opening a note
+            </label>
+            <label>
               <input type="checkbox" id="setting-preview" />
-              Show note preview
+              Show content preview next to title
             </label>
             <label>
               <input type="checkbox" id="setting-date" />
               Show date modified
             </label>
             <label>
+              Date format
+              <select id="setting-date-style">
+                <option value="smart">Smart</option>
+                <option value="absolute">Absolute</option>
+                <option value="relative">Relative</option>
+              </select>
+            </label>
+            <label>
               <input type="checkbox" id="setting-due" />
-              Show due column
+              Allow sorting by due date
+            </label>
+            <label>
+              <input type="checkbox" id="setting-inbox-new" />
+              New notes start in the Inbox
+            </label>
+            <p class="setting-note">
+              Everything you write begins as a fleeting note, and filing it
+              into The Index becomes a deliberate act — including notes created
+              by following a <code>[[link]]</code> that doesn't exist yet. Notes
+              made from a template are unaffected, since those arrive with
+              structure you chose deliberately.
+            </p>
+            <label>
+              <input type="checkbox" id="setting-inbox-in-list" />
+              Show fleeting notes in the list
+            </label>
+          </section>
+
+          <section>
+            <h3>Editor</h3>
+            <label>
+              <input type="checkbox" id="setting-show-tags" />
+              Show tags in title bar
+            </label>
+            <label>
+              <input type="checkbox" id="setting-show-due-pill" />
+              Show due date pill in title bar
+            </label>
+            <label>
+              <input type="checkbox" id="setting-require-modifier" />
+              Require Ctrl-click to open note links
+            </label>
+            <label>
+              <input type="checkbox" id="setting-show-interlinks" />
+              Show interlinks in footer
             </label>
           </section>
 
@@ -118,6 +199,10 @@
             <label>
               <input type="checkbox" id="setting-autostart" />
               Open Envy at login
+            </label>
+            <label>
+              <input type="checkbox" id="setting-hide-on-blur" />
+              Hide Envy when clicking outside the app
             </label>
             <p class="setting-note">
               <strong>Ctrl+Alt+Enter</strong> shows or hides Envy from any app.

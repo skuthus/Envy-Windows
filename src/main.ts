@@ -3,6 +3,8 @@ import { EditorState, Compartment } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { open as openFolderPicker } from '@tauri-apps/plugin-dialog'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
   embedHost,
   envyStyler,
@@ -38,6 +40,7 @@ const listHeaderEl = document.getElementById('list-header')!
 const countEl = document.getElementById('count')!
 const titleEl = document.getElementById('note-title') as HTMLInputElement
 const dueEl = document.getElementById('note-due')!
+const tagsEl = document.getElementById('note-tags')!
 const editorEl = document.getElementById('editor')!
 const emptyEl = document.getElementById('empty-state')!
 
@@ -93,7 +96,9 @@ const view = new EditorView({
           // requires a modifier by default (`requireModifierForLinkClick`) so
           // an ordinary click can still place the cursor inside a link to
           // edit it — the two gestures would otherwise fight.
-          if (!event.ctrlKey || event.button !== 0) return false
+          // Turning the setting off trades that away for a plain click.
+          if (event.button !== 0) return false
+          if (settings.requireModifierForLinkClick && !event.ctrlKey) return false
           const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
           if (pos === null) return false
           const target = wikiLinkTargetAt(v, pos)
@@ -197,7 +202,7 @@ function renderInterlinks() {
     currentInterlinks.backlinks.length +
     currentInterlinks.suggested.length
 
-  if (!openNoteId || total === 0) {
+  if (!openNoteId || total === 0 || !settings.showBacklinks) {
     interlinksToggleEl.classList.add('hidden')
     interlinksEl.classList.add('hidden')
     return
@@ -478,8 +483,28 @@ function applySavedNote(saved: NoteDto) {
 }
 
 function renderDueBadge(due: string | null) {
-  dueEl.textContent = due ? formatDue(due) : ''
-  dueEl.className = due ? `envy-due-${dueUrgencyClass(due)}` : ''
+  const show = due && settings.showDuePill
+  dueEl.textContent = show ? formatDue(due) : ''
+  dueEl.className = show ? `envy-due-${dueUrgencyClass(due)}` : ''
+}
+
+/// Tags of the open note, shown beside its title. Off by default — the tags
+/// are already visible in the text, so this is for people who want them
+/// summarised rather than hunted for.
+function renderTitleBarTags(tags: string[]) {
+  tagsEl.replaceChildren()
+  if (!settings.showTagsInTitleBar || tags.length === 0) return
+  for (const t of tags) {
+    const el = document.createElement('span')
+    el.className = 'envy-tag title-tag'
+    el.textContent = `#${t}`
+    el.title = `Search tag:${t}`
+    el.onclick = () => {
+      searchInput.value = `tag:${t}`
+      void runSearch()
+    }
+    tagsEl.append(el)
+  }
 }
 
 function dueUrgencyClass(iso: string): string {
@@ -507,9 +532,20 @@ const settings = {
   showDueSort: boolSetting('showDueSort', true),
   includeSubfolders: boolSetting('indexIncludeSubfolders', false),
   theme: localStorage.getItem('appearanceMode') ?? 'system',
+  moveFocusToEditorOnEnter: boolSetting('moveFocusToEditorOnEnter', true),
+  dateDisplayStyle: localStorage.getItem('dateDisplayStyle') ?? 'smart',
+  newNotesStartInInbox: boolSetting('newNotesStartInInbox', false),
+  showInboxInMainList: boolSetting('showInboxInMainList', true),
+  showTagsInTitleBar: boolSetting('showTagsInTitleBar', false),
+  showDuePill: boolSetting('showDuePill', true),
+  requireModifierForLinkClick: boolSetting('requireModifierForLinkClick', true),
+  showBacklinks: boolSetting('showBacklinks', true),
+  hideOnBlur: boolSetting('hideOnFocusLoss', false),
+  templateDateFormat: localStorage.getItem('templateDateFormat') ?? 'yyyy-MM-dd',
+  trashMaxAgeDays: Number(localStorage.getItem('trashMaxAgeDays') ?? '0'),
 }
 
-function saveSetting(key: string, value: string | boolean) {
+function saveSetting(key: string, value: string | boolean | number) {
   localStorage.setItem(key, String(value))
 }
 
@@ -598,14 +634,32 @@ function renderSortHeader() {
   )
 }
 
-/// The "smart" date style: a time for today, a weekday within the last week,
-/// month/day within this year, and a full date beyond that.
+/// Three date styles, matching the Mac's picker.
+///
+/// "Smart" changes unit as things age — a time for today, a weekday within the
+/// week, month/day within the year — which is what makes a list of recent
+/// notes readable at a glance. The other two are for people who would rather
+/// have one consistent shape.
 function formatModified(ms: number): string {
   const d = new Date(ms)
   const now = new Date()
+
+  if (settings.dateDisplayStyle === 'absolute') {
+    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  }
+
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const dayOf = new Date(d.getFullYear(), d.getMonth(), d.getDate())
   const days = Math.round((today.getTime() - dayOf.getTime()) / 86400000)
+
+  if (settings.dateDisplayStyle === 'relative') {
+    if (days === 0) return 'Today'
+    if (days === 1) return 'Yesterday'
+    if (days < 7) return `${days} days ago`
+    if (days < 30) return `${Math.floor(days / 7)} week${days < 14 ? '' : 's'} ago`
+    if (days < 365) return `${Math.floor(days / 30)} month${days < 60 ? '' : 's'} ago`
+    return `${Math.floor(days / 365)} year${days < 730 ? '' : 's'} ago`
+  }
 
   if (days === 0) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
   if (days === 1) return 'Yesterday'
@@ -910,8 +964,22 @@ async function runSearch() {
   templateResults = []
   trashPreviewEl.classList.add('hidden')
   results = await invoke<NoteDto[]>('search', { query: searchInput.value })
+  // Fleeting notes can be kept out of the way until you go looking for them.
+  // Never hidden when the query is already about the inbox, though — asking
+  // for "inbox:" and being shown nothing because of a setting elsewhere would
+  // be its own bug.
+  if (!settings.showInboxInMainList && !searchInput.value.toLowerCase().includes('inbox:')) {
+    results = results.filter((n) => !n.isInbox)
+  }
   highlighted = 0
   renderList()
+}
+
+/// Focus the editor after opening, unless the setting says to stay in the
+/// search box — some people arrow through results reading, and being thrown
+/// into the text each time fights that.
+function focusEditorIfWanted() {
+  if (settings.moveFocusToEditorOnEnter) view.focus()
 }
 
 async function openNote(id: string) {
@@ -927,6 +995,7 @@ async function openNote(id: string) {
   titleEl.value = note.title
   titleEl.disabled = false
   renderDueBadge(note.due)
+  renderTitleBarTags(note.tags)
   emptyEl.classList.add('hidden')
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: note.content ?? '' },
@@ -1173,7 +1242,7 @@ async function openOrCreate() {
     const existing = results.some((n) => n.title.toLowerCase() === title.toLowerCase())
     if (!title || existing) {
       await openHighlighted()
-      view.focus()
+      focusEditorIfWanted()
       return
     }
     await captureToInbox(title)
@@ -1182,7 +1251,7 @@ async function openOrCreate() {
 
   if (containsSearchOperator(query)) {
     await openHighlighted()
-    view.focus()
+    focusEditorIfWanted()
     return
   }
 
@@ -1192,22 +1261,27 @@ async function openOrCreate() {
     await openNote(exact.id)
     highlighted = results.findIndex((n) => n.id === exact.id)
     renderList()
-    view.focus()
+    focusEditorIfWanted()
     return
   }
   if (results.length > 0) {
     await openHighlighted()
-    view.focus()
+    focusEditorIfWanted()
     return
   }
   if (!query) return
 
-  const created = await invoke<NoteDto>('create_note', { title: query })
+  // "New notes start in the Inbox" makes filing a deliberate act. Notes made
+  // by following a link, or from a template, are unaffected — both are already
+  // placed, so routing them through a capture queue asks a question you have
+  // already answered.
+  const command = settings.newNotesStartInInbox ? 'create_inbox_note' : 'create_note'
+  const created = await invoke<NoteDto>(command, { title: query })
   searchInput.value = ''
   await runSearch()
   await openNote(created.id)
   renderList()
-  view.focus()
+  focusEditorIfWanted()
 }
 
 async function captureToInbox(title: string) {
@@ -1328,6 +1402,7 @@ function closeEditor() {
   titleEl.value = ''
   titleEl.disabled = false
   dueEl.textContent = ''
+  tagsEl.replaceChildren()
   emptyEl.classList.remove('hidden')
   currentInterlinks = { links: [], backlinks: [], suggested: [] }
   renderInterlinks()
@@ -1480,17 +1555,63 @@ darkQuery.addEventListener('change', syncTheme)
 const settingsEl = document.getElementById('settings')!
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 
+const checkbox = (id: string) => el<HTMLInputElement>(id)
+const dropdown = (id: string) => el<HTMLSelectElement>(id)
+
 function openSettings() {
+  // Autostart is the one value whose truth lives outside the app — a registry
+  // entry other tools can change — so it is read from the system each time
+  // rather than cached.
   void invoke<boolean>('autostart_enabled').then((on) => {
-    el<HTMLInputElement>('setting-autostart').checked = on
+    checkbox('setting-autostart').checked = on
   })
-  el<HTMLInputElement>('setting-preview').checked = settings.showNotePreview
-  el<HTMLInputElement>('setting-date').checked = settings.showDateModified
-  el<HTMLInputElement>('setting-due').checked = settings.showDueSort
-  el<HTMLInputElement>('setting-subfolders').checked = settings.includeSubfolders
-  el<HTMLSelectElement>('setting-layout').value = layoutMode
-  el<HTMLSelectElement>('setting-theme').value = settings.theme
+  checkbox('setting-preview').checked = settings.showNotePreview
+  checkbox('setting-date').checked = settings.showDateModified
+  checkbox('setting-due').checked = settings.showDueSort
+  checkbox('setting-subfolders').checked = settings.includeSubfolders
+  checkbox('setting-focus-editor').checked = settings.moveFocusToEditorOnEnter
+  checkbox('setting-inbox-new').checked = settings.newNotesStartInInbox
+  checkbox('setting-inbox-in-list').checked = settings.showInboxInMainList
+  checkbox('setting-show-tags').checked = settings.showTagsInTitleBar
+  checkbox('setting-show-due-pill').checked = settings.showDuePill
+  checkbox('setting-require-modifier').checked = settings.requireModifierForLinkClick
+  checkbox('setting-show-interlinks').checked = settings.showBacklinks
+  checkbox('setting-hide-on-blur').checked = settings.hideOnBlur
+  dropdown('setting-date-style').value = settings.dateDisplayStyle
+  dropdown('setting-trash-age').value = String(settings.trashMaxAgeDays)
+  el<HTMLInputElement>('setting-template-date').value = settings.templateDateFormat
+  updateTemplateDatePreview()
+  dropdown('setting-layout').value = layoutMode
+  dropdown('setting-theme').value = settings.theme
   settingsEl.classList.remove('hidden')
+}
+
+/// A live preview, because the token language is the part nobody remembers.
+function updateTemplateDatePreview() {
+  const pattern = el<HTMLInputElement>('setting-template-date').value
+  const now = new Date()
+  const map: Record<string, string> = {
+    yyyy: String(now.getFullYear()),
+    MMMM: now.toLocaleDateString(undefined, { month: 'long' }),
+    MM: String(now.getMonth() + 1).padStart(2, '0'),
+    dd: String(now.getDate()).padStart(2, '0'),
+    EEEE: now.toLocaleDateString(undefined, { weekday: 'long' }),
+  }
+  // Longest token first, or "MM" would eat the front of "MMMM".
+  const rendered = pattern.replace(/yyyy|MMMM|MM|dd|EEEE/g, (t) => map[t] ?? t)
+  el('setting-template-date-preview').textContent =
+    `Preview: ${rendered}  ·  tokens: yyyy MM dd MMMM EEEE`
+}
+
+/// Binds a checkbox to a boolean setting, persisting it and running whatever
+/// needs to happen afterwards.
+function bindToggle(id: string, key: keyof typeof settings, after?: () => void) {
+  checkbox(id).onchange = (e) => {
+    const on = (e.target as HTMLInputElement).checked
+    ;(settings as Record<string, unknown>)[key] = on
+    saveSetting(key, on)
+    after?.()
+  }
 }
 
 function closeSettings() {
@@ -1503,22 +1624,68 @@ settingsEl.onclick = (e) => {
   if (e.target === settingsEl) closeSettings() // click the backdrop to dismiss
 }
 
-el<HTMLInputElement>('setting-preview').onchange = (e) => {
-  settings.showNotePreview = (e.target as HTMLInputElement).checked
-  saveSetting('showNotePreview', settings.showNotePreview)
-  renderList()
-}
-el<HTMLInputElement>('setting-date').onchange = (e) => {
-  settings.showDateModified = (e.target as HTMLInputElement).checked
-  saveSetting('showDateModified', settings.showDateModified)
+bindToggle('setting-preview', 'showNotePreview', renderList)
+bindToggle('setting-date', 'showDateModified', () => {
   renderSortHeader()
   renderList()
-}
-el<HTMLInputElement>('setting-due').onchange = (e) => {
-  settings.showDueSort = (e.target as HTMLInputElement).checked
-  saveSetting('showDueSort', settings.showDueSort)
+})
+bindToggle('setting-due', 'showDueSort', () => {
   renderSortHeader()
   renderList()
+})
+bindToggle('setting-focus-editor', 'moveFocusToEditorOnEnter')
+bindToggle('setting-inbox-new', 'newNotesStartInInbox')
+bindToggle('setting-inbox-in-list', 'showInboxInMainList', () => void runSearch())
+bindToggle('setting-show-tags', 'showTagsInTitleBar', () => {
+  const open = results.find((n) => n.id === openNoteId)
+  renderTitleBarTags(open?.tags ?? [])
+})
+bindToggle('setting-show-due-pill', 'showDuePill', () => {
+  const open = results.find((n) => n.id === openNoteId)
+  renderDueBadge(open?.due ?? null)
+})
+bindToggle('setting-require-modifier', 'requireModifierForLinkClick')
+bindToggle('setting-show-interlinks', 'showBacklinks', renderInterlinks)
+bindToggle('setting-hide-on-blur', 'hideOnBlur')
+
+dropdown('setting-date-style').onchange = (e) => {
+  settings.dateDisplayStyle = (e.target as HTMLSelectElement).value
+  saveSetting('dateDisplayStyle', settings.dateDisplayStyle)
+  renderList()
+}
+
+dropdown('setting-trash-age').onchange = (e) => {
+  settings.trashMaxAgeDays = Number((e.target as HTMLSelectElement).value)
+  saveSetting('trashMaxAgeDays', settings.trashMaxAgeDays)
+}
+
+el<HTMLInputElement>('setting-template-date').oninput = () => {
+  settings.templateDateFormat = el<HTMLInputElement>('setting-template-date').value
+  saveSetting('templateDateFormat', settings.templateDateFormat)
+  updateTemplateDatePreview()
+  void invoke('set_template_date_format', { pattern: settings.templateDateFormat })
+}
+
+el('setting-reveal-templates').onclick = () => void invoke('reveal_folder', { which: 'templates' })
+el('setting-reveal-trash').onclick = () => void invoke('reveal_folder', { which: 'trash' })
+
+async function openFolderDialog(): Promise<string | null> {
+  const picked = await openFolderPicker({ directory: true, multiple: false })
+  return typeof picked === 'string' ? picked : null
+}
+
+el('setting-change-index').onclick = async () => {
+  const picked = await openFolderDialog()
+  if (!picked) return
+  await invoke('set_index_directory', {
+    path: picked,
+    includeSubfolders: settings.includeSubfolders,
+  })
+  el('settings-index-path').textContent = picked
+  searchInput.placeholder = `Search ${picked}…`
+  closeEditor()
+  searchInput.value = ''
+  await runSearch()
 }
 el<HTMLInputElement>('setting-subfolders').onchange = async (e) => {
   settings.includeSubfolders = (e.target as HTMLInputElement).checked
@@ -1570,6 +1737,19 @@ window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !settingsEl.classList.contains('hidden')) closeSettings()
 })
 
+// Dismiss on click-away, for people who treat Envy as a summoned scratchpad
+// rather than a window they keep open. Off by default: losing the window
+// because you glanced at a browser is startling if you didn't ask for it.
+void getCurrentWindow()
+  .onFocusChanged(({ payload: focused }) => {
+    if (!focused && settings.hideOnBlur && settingsEl.classList.contains('hidden')) {
+      void getCurrentWindow().hide()
+    }
+  })
+  .catch(() => {
+    /* not in a Tauri window (dev in a plain browser) */
+  })
+
 async function boot() {
   syncTheme()
   applyLayout()
@@ -1582,6 +1762,13 @@ async function boot() {
   el('settings-index-path').textContent = dir
   if (settings.includeSubfolders) {
     await invoke('set_include_subfolders', { include: true })
+  }
+  await invoke('set_template_date_format', { pattern: settings.templateDateFormat })
+  // Swept at launch rather than on a timer: a note app isn't reliably running
+  // when a timer would fire, and "cleared next time you opened Envy" is both
+  // easier to reason about and impossible to miss.
+  if (settings.trashMaxAgeDays > 0) {
+    await invoke('sweep_trash', { maxAgeDays: settings.trashMaxAgeDays })
   }
   await runSearch()
   searchInput.focus()

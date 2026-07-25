@@ -79,6 +79,31 @@ pub struct AppState {
     suppress_until: Arc<Mutex<Instant>>,
     /// Held only to keep the watch alive; dropping it stops the watcher.
     _watcher: Mutex<Option<IndexWatcher>>,
+    /// The `{{date}}` pattern, mirrored from the frontend's settings.
+    ///
+    /// Needed here because the tray's "New Pinned Note from Template" builds a
+    /// note without any window involved, so it cannot ask the frontend what
+    /// format to use.
+    template_date_format: Mutex<String>,
+}
+
+/// Translates the Mac's date tokens to chrono's strftime.
+///
+/// Deliberately a small fixed set — the same five the Settings pane documents
+/// (`yyyy MM dd MMMM EEEE`) — rather than a general pattern language. Longest
+/// first, or `MM` consumes the front of `MMMM`.
+fn date_pattern_to_strftime(pattern: &str) -> String {
+    pattern
+        .replace("yyyy", "%Y")
+        .replace("MMMM", "%B")
+        .replace("EEEE", "%A")
+        .replace("MM", "%m")
+        .replace("dd", "%d")
+}
+
+#[tauri::command]
+fn set_template_date_format(pattern: String, state: State<AppState>) {
+    *state.template_date_format.lock().unwrap() = pattern;
 }
 
 const SUPPRESS_WINDOW: Duration = Duration::from_millis(500);
@@ -256,6 +281,84 @@ fn delete_from_trash(id: String, state: State<AppState>) -> Result<(), String> {
     };
     store.delete_from_trash(&note);
     Ok(())
+}
+
+/// Deletes trashed notes older than `max_age_days`, for the scheduled sweep.
+///
+/// Age is the file's modification time, which for a trashed note is when it
+/// was deleted — moving a file doesn't touch it. Returns how many went.
+///
+/// Runs on launch rather than on a timer. A note-taking app is not reliably
+/// running when a timer would fire, and "swept the next time you opened Envy"
+/// is both easier to reason about and impossible to miss.
+#[tauri::command]
+fn sweep_trash(max_age_days: u64, state: State<AppState>) -> usize {
+    if max_age_days == 0 {
+        return 0;
+    }
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(max_age_days * 24 * 60 * 60);
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    let stale: Vec<_> = store
+        .trashed_notes()
+        .iter()
+        .filter(|n| n.modified < cutoff)
+        .cloned()
+        .collect();
+    for note in &stale {
+        store.delete_from_trash(note);
+    }
+    stale.len()
+}
+
+/// Reveals one of the Index's own folders. `which` is "index", "templates" or
+/// "trash" — the trash folder is the one beside the Index root, which is where
+/// top-level deletions land.
+#[tauri::command]
+fn reveal_folder(which: String, state: State<AppState>) -> Result<(), String> {
+    let dir = state.store.lock().unwrap().directory().to_path_buf();
+    let path = match which.as_str() {
+        "templates" => dir.join("Templates"),
+        "trash" => dir.join(".trash"),
+        _ => dir,
+    };
+    // Created on demand: Explorer cannot show a folder that doesn't exist yet,
+    // and neither Templates/ nor .trash/ exists until first used.
+    let _ = std::fs::create_dir_all(&path);
+    std::process::Command::new("explorer")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Re-points the store at a different folder.
+#[tauri::command]
+fn set_index_directory(
+    path: String,
+    include_subfolders: bool,
+    state: State<AppState>,
+    app: tauri::AppHandle,
+) -> Result<usize, String> {
+    let store = NoteStore::open(&path, include_subfolders).map_err(|e| e.to_string())?;
+    let count = store.notes().len();
+    *state.store.lock().unwrap() = store;
+    // The old watcher is still pointed at the previous folder; replacing it is
+    // what makes external edits in the new one register at all.
+    let handle = app.clone();
+    let suppress = Arc::clone(&state.suppress_until);
+    let watcher = envy_core::watch_path(PathBuf::from(&path), move || {
+        if std::time::Instant::now() < *suppress.lock().unwrap() {
+            return;
+        }
+        let Some(s) = handle.try_state::<AppState>() else { return };
+        s.store.lock().unwrap().reload();
+        let _ = handle.emit("index-changed", ());
+    })
+    .ok();
+    *state._watcher.lock().unwrap() = watcher;
+    Ok(count)
 }
 
 #[tauri::command]
@@ -611,10 +714,11 @@ fn create_and_pin(app: &tauri::AppHandle, template_path: Option<&str>) {
                     // core, which stays UI-agnostic and owns no date style.
                     Some(t) => {
                         let now = chrono::Local::now();
+                        let pattern = state.template_date_format.lock().unwrap().clone();
                         store.create_from_template(
                             "",
                             &t,
-                            &now.format("%Y-%m-%d").to_string(),
+                            &now.format(&date_pattern_to_strftime(&pattern)).to_string(),
                             &now.format("%-I:%M %p").to_string(),
                         )
                     }
@@ -819,6 +923,7 @@ fn set_autostart(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -863,6 +968,7 @@ pub fn run() {
                 pinned_note: Mutex::new(None),
                 suppress_until,
                 _watcher: Mutex::new(watcher),
+                template_date_format: Mutex::new("yyyy-MM-dd".to_string()),
             });
 
             setup_global_hotkey(app.handle())?;
@@ -885,6 +991,10 @@ pub fn run() {
             restore_from_trash,
             delete_from_trash,
             empty_trash,
+            sweep_trash,
+            reveal_folder,
+            set_index_directory,
+            set_template_date_format,
             interlinks,
             list_templates,
             read_template,
