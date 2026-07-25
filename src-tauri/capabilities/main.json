@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main-window",
+  "description": "Permissions only the main window needs. Separate from the default capability because a capability's `windows` list applies to every permission in it, so folding this in would also hand the pinned-note popover a file dialog it never opens. Choosing the Index folder is the one thing here: the dialog plugin is registered in Rust, but a plugin being registered does not grant the frontend the right to call it, and without this the picker was denied at runtime and the Change Index button silently did nothing.",
+  "windows": ["main"],
+  "permissions": ["dialog:allow-open"]
+}

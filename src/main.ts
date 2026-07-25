@@ -2584,22 +2584,39 @@ el('open-about').onclick = () => openReference('about')
 el('setting-reveal-templates').onclick = () => void invoke('reveal_folder', { which: 'templates' })
 el('setting-reveal-trash').onclick = () => void invoke('reveal_folder', { which: 'trash' })
 
+/// Returns null both when the picker is dismissed and when it fails to open.
+///
+/// The failure is caught rather than left to reject, because these are `async`
+/// click handlers: an unhandled rejection there goes nowhere the user can see,
+/// so the button simply appears dead. That is exactly how a missing
+/// `dialog:allow-open` capability presented — the plugin was registered in
+/// Rust, but registering a plugin is not the same as permitting the frontend to
+/// call it, and the denial surfaced as a button that did nothing at all.
 async function openFolderDialog(): Promise<string | null> {
-  const picked = await openFolderPicker({ directory: true, multiple: false })
-  return typeof picked === 'string' ? picked : null
+  try {
+    const picked = await openFolderPicker({ directory: true, multiple: false })
+    return typeof picked === 'string' ? picked : null
+  } catch (err) {
+    console.error('could not open the folder picker', err)
+    return null
+  }
 }
 
 el('setting-change-index').onclick = async () => {
-  const picked = await openFolderDialog()
-  if (!picked) return
-  await invoke('set_index_directory', {
-    path: picked,
-    includeSubfolders: settings.includeSubfolders,
-  })
-  el('settings-index-path').textContent = picked
-  closeEditor()
-  searchInput.value = ''
-  await runSearch()
+  try {
+    const picked = await openFolderDialog()
+    if (!picked) return
+    await invoke('set_index_directory', {
+      path: picked,
+      includeSubfolders: settings.includeSubfolders,
+    })
+    el('settings-index-path').textContent = picked
+    closeEditor()
+    searchInput.value = ''
+    await runSearch()
+  } catch (err) {
+    console.error('could not change the Index folder', err)
+  }
 }
 el<HTMLInputElement>('setting-subfolders').onchange = async (e) => {
   settings.includeSubfolders = (e.target as HTMLInputElement).checked
