@@ -38,6 +38,14 @@ const emptyEl = document.getElementById('empty-state')!
 let results: NoteDto[] = []
 let highlighted = 0
 let openNoteId: string | null = null
+/// The open note's text as last loaded from or written to disk.
+///
+/// Saving is guarded against this rather than fired unconditionally. Without
+/// the comparison, merely *opening* a note flushes the previous one — an
+/// identical rewrite that still stamps a new modified time, so clicking
+/// through the list reorders it under a date sort. The Mac guards the same
+/// way, in `scheduleSave`: `newValue != note.content`.
+let openNoteSavedContent = ''
 /// Saves are debounced rather than fired per keystroke — the store writes the
 /// whole file atomically, and doing that on every character would be pointless
 /// disk churn. 400ms matches the reload debounce in the Mac's NoteStore.
@@ -392,11 +400,16 @@ function cancelPendingSave() {
 
 async function save() {
   if (!openNoteId) return
+  const content = view.state.doc.toString()
+  // Nothing changed — writing anyway would touch the modified time and
+  // reorder the list for no reason.
+  if (content === openNoteSavedContent) return
   try {
     const saved = await invoke<NoteDto>('save_note', {
       id: openNoteId,
-      content: view.state.doc.toString(),
+      content,
     })
+    openNoteSavedContent = content
     applySavedNote(saved)
     // Editing text can add or remove a [[link]], which changes what this note
     // points at and what it merely mentions.
@@ -667,6 +680,7 @@ async function openNote(id: string) {
   const note = await invoke<NoteDto | null>('read_note', { id })
   if (!note) return
   openNoteId = note.id
+  openNoteSavedContent = note.content ?? ''
   titleEl.value = note.title
   renderDueBadge(note.due)
   emptyEl.classList.add('hidden')
@@ -795,6 +809,7 @@ titleEl.addEventListener('blur', () => void commitRename())
 
 function closeEditor() {
   openNoteId = null
+  openNoteSavedContent = ''
   titleEl.value = ''
   dueEl.textContent = ''
   emptyEl.classList.remove('hidden')
@@ -868,6 +883,9 @@ void listen('index-changed', async () => {
         changes: { from: 0, to: view.state.doc.length, insert: fresh.content },
         selection: { anchor: Math.min(cursor, fresh.content.length) },
       })
+      // What's on disk is now what's in the buffer, so a later save has
+      // nothing to write until the text actually changes again.
+      openNoteSavedContent = fresh.content
     }
   }
 })
