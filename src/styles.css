@@ -416,6 +416,71 @@ body.popover {
 .interlink-row.suggested { color: var(--envy-blockquote); font-style: italic; }
 .interlink-row.suggested:hover { color: var(--envy-link); font-style: normal; }
 
+/* --- Trash preview ---------------------------------------------------------
+   Shown, never edited. A note in the trash is a record of something removed,
+   and letting it be typed into would make "restore" ambiguous about which
+   version it restores. Hence a <pre> rather than the editor — it also makes
+   the difference visible at a glance rather than only on trying to type. */
+
+#trash-preview {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--envy-background);
+  z-index: 1;
+}
+#trash-preview.hidden { display: none; }
+
+#trash-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--envy-title-bar-background);
+  border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 30%, transparent);
+}
+#trash-preview-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#trash-preview-bar button {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: transparent;
+  color: var(--envy-text);
+  cursor: default;
+  white-space: nowrap;
+}
+#trash-preview-bar button:hover { background: color-mix(in srgb, var(--envy-marker) 20%, transparent); }
+#trash-preview-bar button.destructive { color: var(--envy-due-overdue); border-color: color-mix(in srgb, var(--envy-due-overdue) 55%, transparent); }
+#trash-preview-bar button.destructive:hover { background: color-mix(in srgb, var(--envy-due-overdue) 18%, transparent); }
+
+#trash-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 16px 28px;
+  font-family: var(--envy-font-family);
+  font-size: var(--envy-font-size);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--envy-text);
+  user-select: text;
+}
+
+.trash-mark { margin-right: 6px; opacity: 0.7; }
+
 /* --- Context menu ----------------------------------------------------------- */
 
 #context-menu {

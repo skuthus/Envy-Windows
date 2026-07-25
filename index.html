@@ -51,6 +51,18 @@
             Type to search. Press Return to open the top match, or create a note
             from what you typed.
           </div>
+          <!-- Trashed notes are shown, never edited: a note in the trash is a
+               record of something removed, and letting it be typed into would
+               make "restore" ambiguous about which version it restores. -->
+          <div id="trash-preview" class="hidden">
+            <div id="trash-preview-bar">
+              <span id="trash-preview-title"></span>
+              <button id="trash-restore" type="button">Restore</button>
+              <button id="trash-reveal" type="button">Reveal in Explorer</button>
+              <button id="trash-delete" type="button" class="destructive">Delete</button>
+            </div>
+            <pre id="trash-preview-body"></pre>
+          </div>
           <!-- Sits directly above the footer bar so expanding grows the panel
                upward into the editor rather than pushing the footer down. -->
           <div id="interlinks" class="hidden"></div>
@@ -78,6 +90,11 @@
               <input type="checkbox" id="setting-subfolders" />
               Include subfolders
             </label>
+            <p class="setting-note">
+              Deleted notes go to a hidden <code>.trash</code> folder beside
+              them. Type <code>trash:</code> to browse or restore them.
+            </p>
+            <button id="setting-empty-trash" type="button">Empty Trash…</button>
           </section>
 
           <section>

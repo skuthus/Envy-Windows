@@ -722,6 +722,95 @@ function renderList() {
   )
 }
 
+// --- Trash ------------------------------------------------------------------
+// `trash:` swaps the list over to what's been deleted, the same shape
+// `template:` and `inbox:` use. Return never acts here — restore and delete
+// stay explicit buttons or a right-click, never a side effect of pressing a
+// key while browsing what you threw away.
+
+const trashPreviewEl = document.getElementById('trash-preview')!
+const trashTitleEl = document.getElementById('trash-preview-title')!
+const trashBodyEl = document.getElementById('trash-preview-body')!
+
+let trashResults: NoteDto[] = []
+
+function showTrashPreview(note: NoteDto | null) {
+  if (!note) {
+    trashPreviewEl.classList.add('hidden')
+    return
+  }
+  trashTitleEl.textContent = note.title
+  trashBodyEl.textContent = note.content ?? ''
+  trashPreviewEl.classList.remove('hidden')
+  emptyEl.classList.add('hidden')
+}
+
+function renderTrashList() {
+  countEl.textContent = trashResults.length ? String(trashResults.length) : ''
+  listEl.replaceChildren(
+    ...trashResults.map((note, i) => {
+      const row = document.createElement('div')
+      row.className = 'row' + (i === highlighted ? ' highlighted' : '')
+      const title = document.createElement('div')
+      title.className = 'row-title'
+      const icon = document.createElement('span')
+      icon.className = 'trash-mark'
+      icon.textContent = '🗑'
+      title.append(icon, document.createTextNode(note.title))
+      const date = document.createElement('span')
+      date.className = 'row-date'
+      date.textContent = formatModified(note.modifiedMs)
+      row.append(title, date)
+
+      row.onclick = () => {
+        highlighted = i
+        renderTrashList()
+        showTrashPreview(note)
+      }
+      row.oncontextmenu = (e) => {
+        e.preventDefault()
+        highlighted = i
+        renderTrashList()
+        showTrashPreview(note)
+        openContextMenu(e.clientX, e.clientY, trashMenuItems(note))
+      }
+      return row
+    }),
+  )
+  showTrashPreview(trashResults[highlighted] ?? null)
+}
+
+function trashMenuItems(note: NoteDto): MenuItemSpec[] {
+  return [
+    { label: 'Restore', run: () => restoreTrashed(note) },
+    { label: 'Reveal in Explorer', run: () => invoke('reveal_note', { id: note.id }) },
+    { label: 'Delete', destructive: true, run: () => deleteTrashed(note) },
+  ]
+}
+
+async function restoreTrashed(note: NoteDto) {
+  await invoke('restore_from_trash', { id: note.id })
+  await runSearch()
+}
+
+async function deleteTrashed(note: NoteDto) {
+  await invoke('delete_from_trash', { id: note.id })
+  await runSearch()
+}
+
+document.getElementById('trash-restore')!.onclick = () => {
+  const note = trashResults[highlighted]
+  if (note) void restoreTrashed(note)
+}
+document.getElementById('trash-reveal')!.onclick = () => {
+  const note = trashResults[highlighted]
+  if (note) void invoke('reveal_note', { id: note.id })
+}
+document.getElementById('trash-delete')!.onclick = () => {
+  const note = trashResults[highlighted]
+  if (note) void deleteTrashed(note)
+}
+
 // --- Templates --------------------------------------------------------------
 // A template is a plain .md file in the Index's Templates/ folder — never a
 // note, and never in the search results. `template:` swaps the list over to
@@ -792,15 +881,34 @@ async function openHighlightedTemplate() {
 async function runSearch() {
   // Push the query into the editor so matches light up in the open note.
   view.dispatch({ effects: setSearchQuery.of(searchInput.value) })
-  const fragment = templateFragment()
-  if (fragment !== null) {
-    templateResults = await invoke<TemplateDto[]>('list_templates', { fragment })
+
+  const template = templateFragment()
+  if (template !== null) {
+    templateResults = await invoke<TemplateDto[]>('list_templates', { fragment: template })
     results = []
+    trashResults = []
     highlighted = 0
+    trashPreviewEl.classList.add('hidden')
     renderTemplateList()
     return
   }
+
+  const trash = trashFragment()
+  if (trash !== null) {
+    trashResults = await invoke<NoteDto[]>('trashed_notes', { fragment: trash })
+    results = []
+    templateResults = []
+    highlighted = 0
+    // The editor belongs to the Index, not to the trash — hide it rather than
+    // leave the last-opened note sitting behind a trash preview.
+    closeEditor()
+    renderTrashList()
+    return
+  }
+
+  trashResults = []
   templateResults = []
+  trashPreviewEl.classList.add('hidden')
   results = await invoke<NoteDto[]>('search', { query: searchInput.value })
   highlighted = 0
   renderList()
@@ -1120,10 +1228,13 @@ searchInput.addEventListener('input', () => void runSearch())
 /// Whichever list is on screen — notes, or templates while `template:` is
 /// typed. Arrowing has to move through what's actually shown.
 function currentListLength(): number {
-  return templateFragment() !== null ? templateResults.length : results.length
+  if (templateFragment() !== null) return templateResults.length
+  if (trashFragment() !== null) return trashResults.length
+  return results.length
 }
 function renderCurrentList() {
   if (templateFragment() !== null) renderTemplateList()
+  else if (trashFragment() !== null) renderTrashList()
   else renderList()
 }
 
@@ -1425,6 +1536,22 @@ el<HTMLSelectElement>('setting-theme').onchange = (e) => {
   syncTheme()
 }
 el('settings-open-folder').onclick = () => void invoke('reveal_index')
+
+// Confirmed, because this is the one action in the app that destroys notes
+// with no way back — everything else routes through the trash first.
+el('setting-empty-trash').onclick = async () => {
+  const waiting = await invoke<NoteDto[]>('trashed_notes', { fragment: '' })
+  if (waiting.length === 0) {
+    window.alert('The trash is already empty.')
+    return
+  }
+  const ok = window.confirm(
+    `Permanently delete ${waiting.length} note${waiting.length === 1 ? '' : 's'}? This cannot be undone.`,
+  )
+  if (!ok) return
+  await invoke('empty_trash')
+  await runSearch()
+}
 
 // Autostart is the one setting whose truth lives outside the app — it's a
 // registry entry the user (or another tool) can change behind our back — so

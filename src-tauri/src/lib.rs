@@ -214,6 +214,59 @@ fn delete_note(id: String, state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Notes currently sitting in any `.trash` folder, filtered by the text typed
+/// after `trash:`. An empty fragment matches everything, the same way
+/// `template:` shows every template until you narrow it.
+///
+/// Content is included: the trash preview shows the note's text, and a trashed
+/// note is not in `notes()`, so `read_note` cannot reach it.
+#[tauri::command]
+fn trashed_notes(fragment: String, state: State<AppState>) -> Vec<NoteDto> {
+    let needle = fragment.trim().to_lowercase();
+    state
+        .store
+        .lock()
+        .unwrap()
+        .trashed_notes()
+        .iter()
+        .filter(|n| needle.is_empty() || n.lowercased_title().contains(&needle))
+        .map(|n| NoteDto::from_note(n, true))
+        .collect()
+}
+
+#[tauri::command]
+fn restore_from_trash(id: String, state: State<AppState>) -> Result<NoteDto, String> {
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    let Some(note) = store.trashed_notes().iter().find(|n| n.id() == id).cloned() else {
+        return Err(format!("no trashed note with id {id}"));
+    };
+    store
+        .restore_from_trash(&note)
+        .map(|n| NoteDto::from_note(&n, false))
+        .ok_or_else(|| "could not restore the note".to_string())
+}
+
+#[tauri::command]
+fn delete_from_trash(id: String, state: State<AppState>) -> Result<(), String> {
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    let Some(note) = store.trashed_notes().iter().find(|n| n.id() == id).cloned() else {
+        return Err(format!("no trashed note with id {id}"));
+    };
+    store.delete_from_trash(&note);
+    Ok(())
+}
+
+#[tauri::command]
+fn empty_trash(state: State<AppState>) -> usize {
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    let count = store.trashed_notes().len();
+    store.empty_trash();
+    count
+}
+
 #[tauri::command]
 fn restore_last_deleted(state: State<AppState>) -> Vec<NoteDto> {
     state.mark_internal_write();
@@ -361,9 +414,12 @@ fn reveal_index(state: State<AppState>) -> Result<(), String> {
 fn reveal_note(id: String, state: State<AppState>) -> Result<(), String> {
     let path = {
         let store = state.store.lock().unwrap();
+        // Trash is searched too: "Reveal in Explorer" is offered on trashed
+        // notes as well, and those are not in `notes()`.
         store
             .notes()
             .iter()
+            .chain(store.trashed_notes().iter())
             .find(|n| n.id() == id)
             .map(|n| n.url().to_path_buf())
             .ok_or_else(|| format!("no note with id {id}"))?
@@ -825,6 +881,10 @@ pub fn run() {
             delete_note,
             restore_last_deleted,
             can_restore,
+            trashed_notes,
+            restore_from_trash,
+            delete_from_trash,
+            empty_trash,
             interlinks,
             list_templates,
             read_template,
