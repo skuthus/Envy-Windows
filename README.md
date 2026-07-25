@@ -42,6 +42,37 @@ Tauri v2 (Rust + WebView2) with a TypeScript frontend. Chosen over Electron for
 size and memory, and over WinUI 3 because a note app lives or dies by its text
 editor and CodeMirror 6 is a far better starting point than building one.
 
+## Running it
+
+**`dev.cmd`** — double-click to launch with hot reload. The frontend reloads on
+save and the Rust side rebuilds automatically. The console window it opens is
+the app's parent: closing either one ends the session. Best for iterating.
+
+**`build.cmd`** — compiles a real standalone app, several minutes the first
+time. Afterwards run `target\release\envy-windows.exe` directly, with no
+terminal and no dev server. Best for using Envy as a user would.
+
+`build.cmd` also produces installers under `target\release\bundle\`. They are
+unsigned, so Windows SmartScreen will warn about them — expected until code
+signing is set up. Running the `.exe` directly avoids the warning.
+
+Notes live in `%USERPROFILE%\Documents\Envy`, created on first launch along
+with a welcome note.
+
+### Keyboard
+
+| Keys | Action |
+|---|---|
+| `Ctrl+L` | Jump to the search box |
+| `↑` / `↓` | Move the highlighted note |
+| `Return` | Open the top match, or create a note from what you typed |
+| `Ctrl`-click a `[[link]]` | Open the linked note, creating it if needed |
+| `Ctrl+Backspace` | Delete the highlighted note |
+| `Ctrl+Shift+Backspace` | Restore the last deleted note(s) |
+| `Ctrl+Shift+L` | Toggle vertical / horizontal layout |
+| `Ctrl+,` | Settings |
+| `Alt+↑` | Move focus from the editor back to search |
+
 ## Requirements
 
 - Rust (stable, `x86_64-pc-windows-msvc`)
