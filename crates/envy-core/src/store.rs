@@ -444,23 +444,58 @@ fn set_modified(path: &Path, time: SystemTime) -> std::io::Result<()> {
 /// user made to organise things, it's where captures land, and a fleeting note
 /// that only appears if an unrelated setting happens to be enabled is a lost
 /// note.
-fn note_paths(directory: &Path, include_subfolders: bool) -> Vec<PathBuf> {
+/// Returns each note's modification time alongside its path, taken from the
+/// directory entry rather than looked up afterwards.
+///
+/// This matters more on Windows than the shape of the code suggests. Windows'
+/// directory enumeration returns full metadata for every entry as part of the
+/// listing, and `DirEntry::file_type`/`DirEntry::metadata` read it straight out
+/// of that already-fetched record without touching the disk again. Calling
+/// `Path::is_dir()` or `fs::metadata(&path)` instead throws that away and opens
+/// the file by path a second time — and a path-based open on Windows is far
+/// more expensive than the equivalent `stat` on macOS, because it walks and
+/// re-resolves every component of the path.
+///
+/// Doing it the naive way cost two extra opens per note (one to test whether
+/// the entry was a directory, one for the modification date), so scanning
+/// 5,000 notes paid 15,000 file opens rather than 5,000. That is the whole
+/// reason a reload here was slower than the Mac's, which gets the same data for
+/// free by asking for `.contentModificationDateKey` during enumeration.
+fn note_paths(directory: &Path, include_subfolders: bool) -> Vec<(PathBuf, SystemTime)> {
     let templates = directory.join(TEMPLATES_FOLDER_NAME);
     let mut out = Vec::new();
 
-    fn walk(dir: &Path, templates: &Path, recurse: bool, out: &mut Vec<PathBuf>) {
+    fn walk(
+        dir: &Path,
+        templates: &Path,
+        recurse: bool,
+        out: &mut Vec<(PathBuf, SystemTime)>,
+    ) {
         let Ok(entries) = fs::read_dir(dir) else {
             return;
         };
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
-            if path.is_dir() {
+            // A symlink's own file_type says "symlink", not what it points at,
+            // so fall back to the path-based test for those alone — the Mac
+            // resolves symlinks here too, and they're rare enough that the
+            // extra syscall doesn't matter.
+            let is_dir = match entry.file_type() {
+                Ok(t) if t.is_symlink() => path.is_dir(),
+                Ok(t) => t.is_dir(),
+                Err(_) => path.is_dir(),
+            };
+            if is_dir {
                 if !recurse || is_hidden(&path) || path == templates {
                     continue;
                 }
                 walk(&path, templates, true, out);
             } else if is_markdown(&path) && !is_hidden(&path) {
-                out.push(path);
+                let modified = entry
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or_else(|_| SystemTime::now());
+                out.push((path, modified));
             }
         }
     }
@@ -487,11 +522,8 @@ pub fn scan_directory(directory: &Path, include_subfolders: bool) -> Vec<Note> {
     let paths = note_paths(directory, include_subfolders);
     let mut notes: Vec<Note> = paths
         .into_par_iter()
-        .filter_map(|path| {
+        .filter_map(|(path, modified)| {
             let content = fs::read_to_string(&path).ok()?;
-            let modified = fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .unwrap_or_else(|_| SystemTime::now());
             Some(Note::new(path, content, modified))
         })
         .collect();

@@ -234,6 +234,13 @@ body.fade-focus #editor-pane:focus-within {
 /* Compact by default — `listDensity` is `.compact` and `showNotePreview` is
    false on the Mac, so one dense line per note is the real default row, not a
    two-line card. */
+/* Carries the full height of the result set so the scrollbar reflects every
+   note, while only the visible rows are actually in the DOM (see renderList).
+   The rows inside are positioned at their true offsets rather than laid out in
+   flow, since the ones above the viewport don't exist to push them down. */
+#list-sizer { position: relative; }
+#list-sizer > .row { position: absolute; left: 0; right: 0; }
+
 .row {
   display: grid;
   grid-template-columns: 1fr auto auto;
@@ -282,6 +289,19 @@ body.fade-focus #editor-pane:focus-within {
 }
 .ai-badge { margin-left: 6px; color: var(--envy-blockquote); }
 .pin-mark { margin-right: 5px; font-size: 10px; }
+
+/* These marks must not be allowed to set the row's height. `⎈`, `📌` and `📍`
+   all have taller line boxes than the title text does — not because they're
+   drawn any larger, but because their fonts declare more ascent — so a row
+   carrying one came out 1px taller than its neighbours. That was invisible
+   until the list was virtualized, at which point rows are placed at multiples
+   of a single measured height and anything off-size leaves a hairline gap or
+   overlaps the row below. Capping the line box costs nothing visually: the
+   glyphs are unchanged, they simply stop dictating the row metrics. */
+.row .ai-badge,
+.row .pin-mark,
+.row .inbox-dot,
+.row .trash-mark { line-height: 1; }
 
 #settings-panel .setting-note {
   margin: 6px 0 0;

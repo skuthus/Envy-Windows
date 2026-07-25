@@ -756,10 +756,114 @@ function formatDue(iso: string): string {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
+// --- List virtualization ----------------------------------------------------
+// The Mac's list is a `LazyVStack` inside a `ScrollView`: SwiftUI only ever
+// materialises the rows actually on screen, so an Index of 5,000 notes costs
+// the same to display as one of 50. Building a DOM node per result — which is
+// what this did — made every keystroke pay for the whole Index instead, since
+// each search re-renders the list.
+//
+// Same idea reproduced here. One spacer element carries the full scroll height
+// so the scrollbar stays honest, and only the rows inside the viewport exist as
+// elements, positioned absolutely at their true offsets. The overscan renders a
+// few rows past each edge so a fast scroll doesn't flash empty space before the
+// next frame lands.
+
+const listSizer = document.createElement('div')
+listSizer.id = 'list-sizer'
+
+/// Rows are uniform in height — every field in one is `nowrap`, so nothing
+/// reflows onto a second line — but the exact height depends on the row
+/// padding, the UI scale and whether previews are switched on. Rather than
+/// track all three settings, it's measured from a real rendered row and
+/// corrected whenever it turns out to have changed.
+let rowHeight = 24
+const ROW_OVERSCAN = 6
+
+/// The window currently in the DOM, so scrolling can skip the rebuild whenever
+/// the same rows are still the right ones.
+let renderedFrom = -1
+let renderedTo = -1
+
+/// The list is `overflow: hidden` while the pane is collapsed, and measures
+/// zero before first layout. Falling back to a plausible height keeps the
+/// first render from producing an empty list that only fills in on scroll.
+function listViewport(): number {
+  return listEl.clientHeight || 600
+}
+
 function renderList() {
   results = applyPinning(sortNotes(results))
-  listEl.replaceChildren(
-    ...results.map((note, i) => {
+  // trash: and template: replace the list's children wholesale, so the spacer
+  // has to be put back rather than assumed to still be there.
+  if (listSizer.parentElement !== listEl) listEl.replaceChildren(listSizer)
+  listSizer.style.height = `${results.length * rowHeight}px`
+  scrollHighlightIntoView()
+  renderRowWindow(true)
+}
+
+/// Mirrors the Mac's `.onChange(of: selectedID) { proxy.scrollTo(...) }` —
+/// it scrolls when the selection *changes*, not on every re-render, so
+/// toggling a setting doesn't yank the list back to the selected row.
+///
+/// Necessary here in a way it wasn't before: with only the visible rows in the
+/// DOM, arrow-keying to an off-screen row would otherwise select something that
+/// doesn't exist on screen and never scroll to it.
+let lastScrolledId: string | null = null
+function scrollHighlightIntoView() {
+  const id = results[highlighted]?.id ?? null
+  if (id === lastScrolledId) return
+  lastScrolledId = id
+  if (id === null) return
+  const top = highlighted * rowHeight
+  const viewport = listViewport()
+  if (top < listEl.scrollTop) listEl.scrollTop = top
+  else if (top + rowHeight > listEl.scrollTop + viewport) {
+    listEl.scrollTop = top + rowHeight - viewport
+  }
+}
+
+function renderRowWindow(force = false) {
+  const viewport = listViewport()
+  const from = Math.max(0, Math.floor(listEl.scrollTop / rowHeight) - ROW_OVERSCAN)
+  const to = Math.min(
+    results.length,
+    Math.ceil((listEl.scrollTop + viewport) / rowHeight) + ROW_OVERSCAN,
+  )
+  if (!force && from === renderedFrom && to === renderedTo) return
+  renderedFrom = from
+  renderedTo = to
+
+  const rows: HTMLElement[] = []
+  for (let i = from; i < to; i++) {
+    const row = buildRow(results[i], i)
+    row.style.top = `${i * rowHeight}px`
+    rows.push(row)
+  }
+  listSizer.replaceChildren(...rows)
+
+  // Correct the assumed height from a real row. The second pass measures the
+  // same height it just set, so this settles after one correction rather than
+  // recursing — `force` is dropped so the guard above stops it if it somehow
+  // doesn't.
+  //
+  // Measured fractionally rather than with `offsetHeight`, which rounds to whole
+  // pixels. A row that is really 19.4px tall would be recorded as 19, and every
+  // row would then be placed 0.4px above where the one before it ends — a hairline
+  // gap between rows that widens the further down the list you scroll.
+  const measured = rows[0]?.getBoundingClientRect().height
+  if (measured && Math.abs(measured - rowHeight) > 0.01) {
+    rowHeight = measured
+    listSizer.style.height = `${results.length * rowHeight}px`
+    renderedFrom = -1
+    renderedTo = -1
+    renderRowWindow()
+  }
+}
+
+listEl.addEventListener('scroll', () => renderRowWindow(), { passive: true })
+
+function buildRow(note: NoteDto, i: number): HTMLElement {
       const row = document.createElement('div')
       // The primary selection is marked differently from the rest: it's the
       // one the editor is showing, and losing track of which that is makes a
@@ -862,8 +966,6 @@ function renderList() {
         openContextMenu(e.clientX, e.clientY, noteMenuItems(note))
       }
       return row
-    }),
-  )
 }
 
 /// Briefly highlights text that changed on disk, so an external edit is
@@ -2583,6 +2685,17 @@ async function boot() {
     anchorId = null
     highlighted = 0
   },
+  // The list is virtualized, so how much work a render actually does depends on
+  // the live viewport height and scroll position. Measuring that means driving
+  // the real function against the real element, not counting nodes in the
+  // abstract.
+  renderList,
+  listState: () => ({
+    total: results.length,
+    rendered: listSizer.childElementCount,
+    rowHeight,
+    scrollHeight: listEl.scrollHeight,
+  }),
   previewInterlinks(data: InterlinksDto, expanded = true) {
     currentInterlinks = data
     interlinksExpanded = expanded
