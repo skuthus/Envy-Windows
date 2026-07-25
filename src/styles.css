@@ -154,7 +154,7 @@ html, body {
 #footer,
 #interlinks { font-size: calc(1rem * var(--envy-ui-scale)); }
 .row-title { font-size: calc(13px * var(--envy-ui-scale)); }
-.row-date, .row-due { font-size: calc(11px * var(--envy-ui-scale)); }
+.row-date { font-size: calc(11px * var(--envy-ui-scale)); }
 #search { font-size: calc(15px * var(--envy-ui-scale)); }
 
 /* --- Focus highlight -------------------------------------------------------
@@ -211,42 +211,44 @@ body.fade-focus #editor-pane:focus-within {
    content, so a row carrying a due date pushed its date left of the rows
    without one, and the Date column visibly stepped in and out down the list.
 
-   The widths hold the longest string each formatter can produce, measured in
-   the app's own font at 11px: "Yesterday, 12:46 PM" is 96.8px and "Wednesday
-   +12" is 79px. They scale with the interface text size for the same reason
+   There is one value column, not two. A row shows whichever date it is sorted
+   by — the due date or the modified date, never both — so Due and Date are two
+   sort buttons over a single column, which is what the Mac's NoteRow does.
+
+   The width holds the longest string either formatter can produce, measured in
+   the app's own font at 11px: "Yesterday, 12:46 PM" is 96.8px, and every due
+   label is shorter. It scales with the interface text size for the same reason
    the fonts do.
 
-   Reserved only when there is something to put in them — the Due column
-   appears once any result actually has a due date, the Date column follows the
-   "Show date modified" setting — so a list with neither keeps the full width
-   for titles instead of holding space for columns that never fill.
+   Reserved only when there is something to put in it — the "Show date
+   modified" setting governs the slot entirely — so a list without it keeps the
+   full width for titles rather than holding open a column that never fills.
 
    Capped as a share of the pane as well, because the side-by-side layout can be
-   dragged down to 220px and the two columns at their full width would leave the
-   title nothing at all — it collapsed to zero and the dates spilled out past the
-   right edge. A percentage resolves against the grid container, which is the
-   same width for the header and every row, so the columns stay aligned with each
-   other while narrowing; the values inside ellipsize instead of overflowing. */
-#list-pane { --envy-due-col: 0px; --envy-date-col: 0px; }
-#list-pane.has-due { --envy-due-col: min(calc(86px * var(--envy-ui-scale)), 22%); }
+   dragged down to 220px, where a full-width column would leave the title
+   nothing at all — it collapsed to zero and the dates spilled out past the right
+   edge. A percentage resolves against the grid container, which is the same
+   width for the header and every row, so they stay aligned with each other while
+   narrowing; the values inside ellipsize instead of overflowing. */
+#list-pane { --envy-date-col: 0px; }
 #list-pane.has-date { --envy-date-col: min(calc(102px * var(--envy-ui-scale)), 30%); }
 
 #list-header,
 .row {
   display: grid;
   /* minmax(0, 1fr) rather than 1fr: a grid track's default minimum is its
-     content, so a long title would refuse to shrink and push the columns off
+     content, so a long title would refuse to shrink and push the column off
      the right edge instead of ellipsizing. */
-  grid-template-columns: minmax(0, 1fr) var(--envy-due-col) var(--envy-date-col);
+  grid-template-columns: minmax(0, 1fr) var(--envy-date-col);
   gap: 8px;
 }
 
-/* Placed by name rather than by source order, so the Date column stays the
-   third track whether or not this particular row has a due date, and whether
-   or not the Due sort button is switched on. */
 .sort-button[data-field='name'], .row-title { grid-column: 1; }
-.sort-button[data-field='due'], .row-due { grid-column: 2; }
-.sort-button[data-field='date'], .row-date { grid-column: 3; }
+.sort-group, .row-date { grid-column: 2; }
+
+/* Both sort buttons share the value column, since either one can be the field
+   on display there. */
+.sort-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
 
 #list-header {
   align-items: center;
@@ -306,7 +308,11 @@ body.fade-focus #editor-pane:focus-within {
    a multi-selection where every row looks identical makes it impossible to
    tell which note you're actually looking at. */
 .row.multi-selected { background: color-mix(in srgb, var(--envy-selection) 40%, transparent); }
-.row.highlighted .row-date,
+/* Overdue and soon keep their urgency colour on the selected row; everything
+   else defers to the selection's own text colour. That split is the Mac's:
+   `dateTextColor` returns the theme colour outright for overdue and soon, but
+   `textColor ?? dueColor` for later — so only later yields to the selection. */
+.row.highlighted .row-date:not(.envy-due-overdue):not(.envy-due-soon),
 .row.highlighted .row-meta,
 .row.highlighted .ai-badge { color: inherit; opacity: 0.8; }
 .row-title {
@@ -331,13 +337,6 @@ body.fade-focus #editor-pane:focus-within {
   grid-column: 1 / -1;
   font-size: 12px;
   color: var(--envy-blockquote);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.row-due {
-  font-size: 11px;
-  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

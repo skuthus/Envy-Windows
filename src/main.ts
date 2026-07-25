@@ -548,7 +548,10 @@ function applySavedNote(saved: NoteDto) {
 
 function renderDueBadge(due: string | null) {
   const show = due && settings.showDuePill
-  dueEl.textContent = show ? formatDue(due) : ''
+  // Fixed to "smart" rather than the user's style, as the Mac does: the labels
+  // this pill actually shows are identical across styles, so there is nothing
+  // for the setting to change here.
+  dueEl.textContent = show ? formatDue(due, 'smart') : ''
   dueEl.className = show ? `envy-due-${dueUrgencyClass(due)}` : ''
 }
 
@@ -675,8 +678,11 @@ function renderSortHeader() {
     ...(settings.showDueSort ? ([['due', 'Due']] as Array<[SortField, string]>) : []),
     ...(settings.showDateModified ? ([['date', 'Date']] as Array<[SortField, string]>) : []),
   ]
-  listHeaderEl.replaceChildren(
-    ...fields.map(([field, label]) => {
+  // Name takes the slack; Due and Date sit together over the one value column
+  // they both control, since only the field being sorted on is displayed there.
+  const sortGroup = document.createElement('div')
+  sortGroup.className = 'sort-group'
+  const buttons = fields.map(([field, label]) => {
       const b = document.createElement('button')
       b.type = 'button'
       b.className = 'sort-button' + (sortField === field ? ' active' : '')
@@ -701,8 +707,10 @@ function renderSortHeader() {
         renderList()
       }
       return b
-    }),
-  )
+  })
+  const name = buttons.find((b) => b.dataset.field === 'name')!
+  sortGroup.append(...buttons.filter((b) => b !== name))
+  listHeaderEl.replaceChildren(name, sortGroup)
 }
 
 const shortTime = (d: Date) =>
@@ -741,7 +749,14 @@ function formatModified(ms: number): string {
   }
 }
 
-function formatDue(iso: string): string {
+/// A due date's own formatting, distinct from `formatModified` because a due
+/// date is a calendar day with no meaningful time — every `@…` token resolves
+/// to local midnight — so a clock time beside one is never right.
+///
+/// Today/Tomorrow/Yesterday and the coming week's day names are the same under
+/// every style; only what happens beyond that differs, and only for "relative".
+/// This mirrors the Mac's `DateDisplayStyle.formatDueDate`.
+function formatDue(iso: string, style: string): string {
   const d = new Date(iso + 'T00:00:00')
   const now = new Date()
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
@@ -753,7 +768,24 @@ function formatDue(iso: string): string {
   if (days > 1 && days < 7) {
     return d.toLocaleDateString(undefined, { weekday: 'long' })
   }
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  if (style === 'relative') return relativeDay(days)
+  return abbrevDate(d)
+}
+
+/// Named relative wording for a whole number of days either side of today,
+/// matching the buckets `formatModified` uses for the past — but a due date can
+/// also be in the future, which a modified date never is.
+function relativeDay(days: number): string {
+  const n = Math.abs(days)
+  const label =
+    n < 7
+      ? `${n} days`
+      : n < 30
+        ? `${Math.floor(n / 7)} week${n < 14 ? '' : 's'}`
+        : n < 365
+          ? `${Math.floor(n / 30)} month${n < 60 ? '' : 's'}`
+          : `${Math.floor(n / 365)} year${n < 730 ? '' : 's'}`
+  return days < 0 ? `${label} ago` : `in ${label}`
 }
 
 // --- List virtualization ----------------------------------------------------
@@ -794,11 +826,9 @@ function listViewport(): number {
 
 function renderList() {
   results = applyPinning(sortNotes(results))
-  // Which trailing columns the header and rows both reserve. The Due column is
-  // only worth its width once something actually has a due date — otherwise a
-  // list with none would hold a permanently empty column open and take that
-  // width away from the titles.
-  listPaneEl.classList.toggle('has-due', results.some((n) => n.due))
+  // Whether the trailing value column is reserved at all. There is only one —
+  // it shows whichever date the list is sorted by — and "Show date modified"
+  // governs it entirely, so with that off the titles get the full width.
   listPaneEl.classList.toggle('has-date', settings.showDateModified)
   // trash: and template: replace the list's children wholesale, so the spacer
   // has to be put back rather than assumed to still be there.
@@ -917,23 +947,32 @@ function buildRow(note: NoteDto, i: number): HTMLElement {
 
       row.append(title)
 
-      if (note.due) {
-        const pill = document.createElement('span')
-        pill.className = `row-due envy-due-${dueUrgencyClass(note.due)}`
-        pill.textContent = formatDue(note.due)
-        // A note with several due dates shouldn't look like it has only the
-        // soonest one.
-        if (note.dueCount > 1) pill.textContent += ` +${note.dueCount - 1}`
-        row.append(pill)
-      }
-
-      // showDateModified defaults to true on the Mac; showNotePreview defaults
-      // to false. So the default row is one dense line — title, due, date —
-      // not a two-line card. Preview is opt-in.
+      // One trailing slot, not two. It shows whichever date the list is sorted
+      // by — a traditional sortable list shows the column you sorted on, the
+      // way Finder's Date Modified column doesn't stick around once you sort by
+      // Date Created instead. Only sorting by Due actually changes it; Name
+      // falls back to the modified date.
+      //
+      // showDateModified defaults to true on the Mac and showNotePreview to
+      // false, so the default row is one dense line — title and date — not a
+      // two-line card. Preview is opt-in.
       if (settings.showDateModified) {
         const date = document.createElement('span')
         date.className = 'row-date'
-        date.textContent = formatModified(note.modifiedMs)
+        if (sortField === 'due') {
+          // Left blank when this note has no due date, rather than quietly
+          // falling back to the modified date — a sorted column leaves a row's
+          // cell empty rather than substituting an unrelated value.
+          if (note.due) {
+            const suffix = note.dueCount > 1 ? ` +${note.dueCount - 1}` : ''
+            date.textContent = formatDue(note.due, settings.dateDisplayStyle) + suffix
+            // Urgency colour belongs to a due date, not to a timestamp, so it
+            // only applies while the slot is actually showing one.
+            date.classList.add(`envy-due-${dueUrgencyClass(note.due)}`)
+          }
+        } else {
+          date.textContent = formatModified(note.modifiedMs)
+        }
         row.append(date)
       }
 
@@ -1200,9 +1239,7 @@ function showTrashPreview(note: NoteDto | null) {
 }
 
 function renderTrashList() {
-  // Trashed rows carry a date and never a due date, so the columns are fixed
-  // regardless of what the notes list was showing before this.
-  listPaneEl.classList.remove('has-due')
+  // Trashed rows always carry a date, whatever the notes list was showing.
   listPaneEl.classList.add('has-date')
   listEl.replaceChildren(
     ...trashResults.map((note, i) => {
@@ -1285,8 +1322,7 @@ let templateResults: TemplateDto[] = []
 let openTemplatePath: string | null = null
 
 function renderTemplateList() {
-  // Same as trash: a single trailing label, never a due date.
-  listPaneEl.classList.remove('has-due')
+  // Same as trash: a single trailing label in the value column.
   listPaneEl.classList.add('has-date')
   listEl.replaceChildren(
     ...templateResults.map((t, i) => {
