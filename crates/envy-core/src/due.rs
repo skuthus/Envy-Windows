@@ -94,23 +94,42 @@ pub fn parse_flexible_date(input: &str) -> Option<NaiveDate> {
     Some(first + Duration::days((day - 1) as i64))
 }
 
-/// Not-yet-due, due-soon (within the coming week), and overdue are three
-/// separate theme tokens rather than one color with urgency layered on top.
-/// Urgency only decides *which* slot applies, never overrides what's in it.
+/// Overdue, due-soon, and later are three separate theme tokens rather than
+/// one color with urgency layered on top. Urgency only decides *which* slot
+/// applies, never overrides what's in it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DueUrgency {
-    Normal,
-    Soon,
     Overdue,
+    Soon,
+    Later,
 }
 
-pub fn urgency_for(date: NaiveDate, today: NaiveDate) -> DueUrgency {
+/// Which day a week starts on. `Calendar.current` on the Mac side resolves
+/// this from the user's locale (Sunday in en-US, Monday across most of
+/// Europe), so it is a parameter here rather than a constant — the Windows
+/// build will read it from the OS the same way, and hardcoding Sunday would
+/// silently shift every "this week" boundary for a large share of users.
+pub const DEFAULT_WEEK_START: Weekday = Weekday::Sun;
+
+/// Buckets a due date for coloring.
+///
+/// "Soon" is the **current calendar week**, deliberately the exact window
+/// `due:week` resolves to — not a rolling seven days from now. That matters in
+/// both directions: it includes days earlier this week that have already
+/// passed (an overdue Tuesday task still reads as "due this week" on
+/// Wednesday), and it excludes days that are within seven days but fall into
+/// next week. A due-soon color that disagreed with what `due:week` actually
+/// returned would be its own confusing bug.
+pub fn urgency_for(date: NaiveDate, today: NaiveDate, week_start: Weekday) -> DueUrgency {
     if date < today {
-        DueUrgency::Overdue
-    } else if date < today + Duration::days(7) {
+        return DueUrgency::Overdue;
+    }
+    // `last_day()` is inclusive, matching Swift's exclusive `interval.end`
+    // compared with `<`.
+    if date <= today.week(week_start).last_day() {
         DueUrgency::Soon
     } else {
-        DueUrgency::Normal
+        DueUrgency::Later
     }
 }
 
@@ -164,12 +183,48 @@ mod tests {
         assert_eq!(resolve_due_token("02-31-26", today), Some(d(2026, 3, 3)));
     }
 
+    /// 2026-07-25 is a Saturday, so with a Sunday-start week the current week
+    /// runs Sun 19th → Sat 25th. That makes today the *last* day of the week,
+    /// which is exactly the case a rolling-7-days implementation gets wrong:
+    /// Sunday the 26th is one day away but belongs to next week.
     #[test]
-    fn urgency_buckets() {
-        let today = d(2026, 7, 25);
-        assert_eq!(urgency_for(d(2026, 7, 24), today), DueUrgency::Overdue);
-        assert_eq!(urgency_for(today, today), DueUrgency::Soon);
-        assert_eq!(urgency_for(d(2026, 7, 31), today), DueUrgency::Soon);
-        assert_eq!(urgency_for(d(2026, 8, 1), today), DueUrgency::Normal);
+    fn soon_is_the_calendar_week_not_a_rolling_seven_days() {
+        let saturday = d(2026, 7, 25);
+        let w = DEFAULT_WEEK_START;
+
+        assert_eq!(urgency_for(d(2026, 7, 24), saturday, w), DueUrgency::Overdue);
+        assert_eq!(urgency_for(saturday, saturday, w), DueUrgency::Soon);
+        // One day out, but into next week — "later", not "soon".
+        assert_eq!(urgency_for(d(2026, 7, 26), saturday, w), DueUrgency::Later);
+    }
+
+    /// The other half of the same rule: mid-week, everything through Saturday
+    /// is "soon", including days already past (they're overdue, which takes
+    /// precedence, but the week boundary itself still ends Saturday).
+    #[test]
+    fn soon_spans_to_the_end_of_the_current_week() {
+        let wednesday = d(2026, 7, 22);
+        let w = DEFAULT_WEEK_START;
+
+        assert_eq!(urgency_for(d(2026, 7, 25), wednesday, w), DueUrgency::Soon);
+        assert_eq!(urgency_for(d(2026, 7, 26), wednesday, w), DueUrgency::Later);
+        // Earlier this week, already passed — overdue wins over the week test.
+        assert_eq!(urgency_for(d(2026, 7, 21), wednesday, w), DueUrgency::Overdue);
+    }
+
+    /// A Monday-start locale shifts the boundary. Hardcoding Sunday would put
+    /// this a full day off for most of Europe.
+    #[test]
+    fn week_start_is_locale_dependent() {
+        let saturday = d(2026, 7, 25);
+        // Monday-start: the week runs Mon 20th → Sun 26th, so the 26th is in.
+        assert_eq!(
+            urgency_for(d(2026, 7, 26), saturday, Weekday::Mon),
+            DueUrgency::Soon
+        );
+        assert_eq!(
+            urgency_for(d(2026, 7, 27), saturday, Weekday::Mon),
+            DueUrgency::Later
+        );
     }
 }

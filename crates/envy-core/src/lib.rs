@@ -16,6 +16,8 @@
 
 pub mod due;
 pub mod note;
+pub mod search;
 
 pub use due::{resolve_due_token, urgency_for, DueUrgency};
 pub use note::{AiProvenance, Note, ParsedWikiLink, WikiLink};
+pub use search::{filtered, SearchContext};
