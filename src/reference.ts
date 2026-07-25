@@ -171,7 +171,35 @@ function renderAbout(version: string): HTMLElement {
   return root
 }
 
-export type ReferenceTab = 'markup' | 'shortcuts' | 'emoji' | 'about'
+/// What changed in this build.
+///
+/// The Windows port's own history rather than a copy of the Mac's changelog —
+/// the two apps have different pasts, and showing macOS release notes to a
+/// Windows user would be describing changes they never experienced.
+const WHATS_NEW: Array<{ title: string; body: string }> = [
+  {
+    title: 'Everything is remappable',
+    body: 'Twenty-one keyboard shortcuts, all changeable in Settings → Shortcuts, including the three that work from any app. Conflicts are flagged rather than left to be discovered.',
+  },
+  {
+    title: 'Multi-select',
+    body: 'Shift-click and Shift-arrow select a range, Ctrl-click toggles individual notes, and a bulk delete restores as one action.',
+  },
+  {
+    title: 'Note embeds and link previews',
+    body: '![[Note]] shows that note inline, and Alt-clicking a link opens it in a small editable panel without leaving where you are.',
+  },
+  {
+    title: 'Typing gets out of the way',
+    body: 'Emoji shortcodes, arrow ligatures, auto-pairing brackets, and relative due dates that freeze to a real date so they stop sliding forward.',
+  },
+  {
+    title: 'Reference built in',
+    body: 'Markup commands, every keyboard shortcut, and all 383 emoji shortcodes, all searchable from Settings.',
+  },
+]
+
+export type ReferenceTab = 'markup' | 'shortcuts' | 'emoji' | 'whatsnew' | 'about'
 
 export function renderReference(tab: ReferenceTab, version: string): HTMLElement {
   switch (tab) {
@@ -179,6 +207,14 @@ export function renderReference(tab: ReferenceTab, version: string): HTMLElement
       return renderShortcuts()
     case 'emoji':
       return renderEmoji()
+    case 'whatsnew': {
+      const root = el('div', 'reference-body')
+      for (const item of WHATS_NEW) {
+        root.append(el('h4', 'reference-group', item.title))
+        root.append(el('p', 'reference-desc', item.body))
+      }
+      return root
+    }
     case 'about':
       return renderAbout(version)
     default:

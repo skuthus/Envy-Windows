@@ -1106,6 +1106,18 @@ fn toggle_pinned_window(app: &tauri::AppHandle) {
 }
 
 /// Whether the app launches at login.
+/// Where Envy appears outside its own window.
+///
+/// The tray icon is never removed, so there is always a way back to the app
+/// besides the global hotkey — the Mac makes the same guarantee with "always
+/// at least one of the two". Only the taskbar entry is optional.
+#[tauri::command]
+fn set_show_in_taskbar(show: bool, app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_skip_taskbar(!show);
+    }
+}
+
 #[tauri::command]
 fn autostart_enabled(app: tauri::AppHandle) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
@@ -1215,6 +1227,7 @@ pub fn run() {
             autostart_enabled,
             set_autostart,
             set_global_shortcuts,
+            set_show_in_taskbar,
             pinned_note_id,
             set_pinned_note,
             open_in_main_window,

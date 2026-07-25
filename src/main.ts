@@ -609,6 +609,7 @@ const settings = {
   listDensity: localStorage.getItem('listDensity') ?? 'compact',
   interfaceTextSize: Number(localStorage.getItem('interfaceTextSize') ?? '1'),
   fadeFocusHighlight: boolSetting('fadeFocusHighlight', false),
+  showInTaskbar: boolSetting('showInTaskbar', true),
   showFooterClock: boolSetting('showFooterClock', false),
   showFooterClockDate: boolSetting('showFooterClockDate', false),
   templateDateFormat: localStorage.getItem('templateDateFormat') ?? 'yyyy-MM-dd',
@@ -2116,6 +2117,7 @@ const REFERENCE_TABS: Array<[ReferenceTab, string]> = [
   ['markup', 'Markup'],
   ['shortcuts', 'Shortcuts'],
   ['emoji', 'Emoji'],
+  ['whatsnew', "What's New"],
   ['about', 'About'],
 ]
 
@@ -2181,6 +2183,7 @@ function openSettings() {
   dropdown('setting-density').value = settings.listDensity
   dropdown('setting-text-size').value = String(settings.interfaceTextSize)
   checkbox('setting-fade-focus').checked = settings.fadeFocusHighlight
+  checkbox('setting-taskbar').checked = settings.showInTaskbar
   checkbox('setting-clock').checked = settings.showFooterClock
   checkbox('setting-clock-date').checked = settings.showFooterClockDate
   recording = null
@@ -2291,6 +2294,9 @@ dropdown('setting-text-size').onchange = (e) => {
 
 bindToggle('setting-fade-focus', 'fadeFocusHighlight', () =>
   document.body.classList.toggle('fade-focus', settings.fadeFocusHighlight),
+)
+bindToggle('setting-taskbar', 'showInTaskbar', () =>
+  void invoke('set_show_in_taskbar', { show: settings.showInTaskbar }),
 )
 bindToggle('setting-clock', 'showFooterClock', startClockTick)
 bindToggle('setting-clock-date', 'showFooterClockDate', startClockTick)
@@ -2528,6 +2534,7 @@ async function boot() {
   // Registers the global chords with the OS. Nothing is registered in Rust at
   // startup, so this is the only path — defaults and remaps go the same way.
   await syncGlobalShortcuts()
+  if (!settings.showInTaskbar) await invoke('set_show_in_taskbar', { show: false })
   // Swept at launch rather than on a timer: a note app isn't reliably running
   // when a timer would fire, and "cleared next time you opened Envy" is both
   // easier to reason about and impossible to miss.
