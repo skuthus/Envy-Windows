@@ -536,11 +536,6 @@ body.popover {
 .context-item:hover { background: var(--envy-selection); }
 /* The destructive entry is coloured, not separated by a divider — one
    irreversible item in a list of six reads better marked than fenced off. */
-.context-separator {
-  height: 1px;
-  margin: 4px 6px;
-  background: color-mix(in srgb, var(--envy-marker) 45%, transparent);
-}
 .context-item.destructive { color: var(--envy-due-overdue); }
 .context-item.destructive:hover {
   background: color-mix(in srgb, var(--envy-due-overdue) 22%, transparent);
