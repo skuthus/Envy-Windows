@@ -580,6 +580,9 @@ const settings = {
   showBacklinks: boolSetting('showBacklinks', true),
   hideOnBlur: boolSetting('hideOnFocusLoss', false),
   linkPreview: localStorage.getItem('linkPreviewTrigger') ?? 'altClick',
+  listDensity: localStorage.getItem('listDensity') ?? 'compact',
+  interfaceTextSize: Number(localStorage.getItem('interfaceTextSize') ?? '1'),
+  fadeFocusHighlight: boolSetting('fadeFocusHighlight', false),
   templateDateFormat: localStorage.getItem('templateDateFormat') ?? 'yyyy-MM-dd',
   trashMaxAgeDays: Number(localStorage.getItem('trashMaxAgeDays') ?? '0'),
 }
@@ -673,40 +676,40 @@ function renderSortHeader() {
   )
 }
 
-/// Three date styles, matching the Mac's picker.
+const shortTime = (d: Date) =>
+  d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+const abbrevDate = (d: Date) =>
+  d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+
+/// The four date styles, matching the Mac's picker exactly.
 ///
-/// "Smart" changes unit as things age — a time for today, a weekday within the
-/// week, month/day within the year — which is what makes a list of recent
-/// notes readable at a glance. The other two are for people who would rather
-/// have one consistent shape.
+/// "Smart" names the day only while that's still useful — today and yesterday
+/// carry a time, because for a note touched in the last two days *when* is the
+/// interesting part; anything older is just a date.
 function formatModified(ms: number): string {
   const d = new Date(ms)
   const now = new Date()
+  const startOf = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const days = Math.round((startOf(now) - startOf(d)) / 86400000)
 
-  if (settings.dateDisplayStyle === 'absolute') {
-    return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+  switch (settings.dateDisplayStyle) {
+    case 'relative': {
+      if (days === 0) return 'today'
+      if (days === 1) return 'yesterday'
+      if (days < 7) return `${days} days ago`
+      if (days < 30) return `${Math.floor(days / 7)} week${days < 14 ? '' : 's'} ago`
+      if (days < 365) return `${Math.floor(days / 30)} month${days < 60 ? '' : 's'} ago`
+      return `${Math.floor(days / 365)} year${days < 730 ? '' : 's'} ago`
+    }
+    case 'dateTime':
+      return `${abbrevDate(d)}, ${shortTime(d)}`
+    case 'dateOnly':
+      return abbrevDate(d)
+    default:
+      if (days === 0) return `Today, ${shortTime(d)}`
+      if (days === 1) return `Yesterday, ${shortTime(d)}`
+      return abbrevDate(d)
   }
-
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-  const dayOf = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-  const days = Math.round((today.getTime() - dayOf.getTime()) / 86400000)
-
-  if (settings.dateDisplayStyle === 'relative') {
-    if (days === 0) return 'Today'
-    if (days === 1) return 'Yesterday'
-    if (days < 7) return `${days} days ago`
-    if (days < 30) return `${Math.floor(days / 7)} week${days < 14 ? '' : 's'} ago`
-    if (days < 365) return `${Math.floor(days / 30)} month${days < 60 ? '' : 's'} ago`
-    return `${Math.floor(days / 365)} year${days < 730 ? '' : 's'} ago`
-  }
-
-  if (days === 0) return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
-  if (days === 1) return 'Yesterday'
-  if (days < 7) return d.toLocaleDateString(undefined, { weekday: 'short' })
-  if (d.getFullYear() === now.getFullYear()) {
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-  }
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
 }
 
 function formatDue(iso: string): string {
@@ -849,6 +852,15 @@ function flashChangedRange(range: { from: number; to: number } | null) {
     flashTimer = undefined
     view.dispatch({ effects: setFlash.of(null) })
   }, 900)
+}
+
+/// Centres the window on whichever monitor it's currently on.
+async function centreWindow() {
+  try {
+    await getCurrentWindow().center()
+  } catch (err) {
+    console.error('could not centre the window', err)
+  }
 }
 
 // --- Link preview ------------------------------------------------------------
@@ -1714,6 +1726,13 @@ searchInput.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape') {
     searchInput.value = ''
     void runSearch()
+  } else if (e.key === 'Backspace' && e.altKey) {
+    // Alt+Backspace clears the whole box — the Mac's ⌥⌫. Faster than
+    // selecting and deleting when a long operator query has stopped being
+    // useful.
+    e.preventDefault()
+    searchInput.value = ''
+    void runSearch()
   }
 })
 
@@ -1773,6 +1792,34 @@ titleEl.addEventListener('keydown', (e) => {
 })
 titleEl.addEventListener('blur', () => void commitRename())
 
+// Hovering a truncated title scrolls it, so a long name can be read without
+// renaming or resizing. Only when it actually overflows, and never while the
+// field is focused — once it's the rename box, the caret drives scrolling and
+// two things fighting over scrollLeft is worse than truncation.
+let titleScroll: number | undefined
+titleEl.addEventListener('mouseenter', () => {
+  if (document.activeElement === titleEl) return
+  const overflow = titleEl.scrollWidth - titleEl.clientWidth
+  if (overflow <= 0) return
+  titleEl.classList.add('scrolling')
+  const started = performance.now()
+  const step = (now: number) => {
+    // A slow there-and-back sweep with a pause at each end, so the start and
+    // end of the title are both readable rather than flying past.
+    const t = ((now - started) / 1000) % 8
+    const eased = t < 1 ? 0 : t < 4 ? (t - 1) / 3 : t < 5 ? 1 : (8 - t) / 3
+    titleEl.scrollLeft = overflow * Math.min(1, Math.max(0, eased))
+    titleScroll = requestAnimationFrame(step)
+  }
+  titleScroll = requestAnimationFrame(step)
+})
+titleEl.addEventListener('mouseleave', () => {
+  if (titleScroll !== undefined) cancelAnimationFrame(titleScroll)
+  titleScroll = undefined
+  titleEl.classList.remove('scrolling')
+  titleEl.scrollLeft = 0
+})
+
 function closeEditor() {
   openNoteId = null
   openTemplatePath = null
@@ -1813,6 +1860,14 @@ window.addEventListener('keydown', (e) => {
   if (e.altKey && key === 't') {
     e.preventDefault()
     void toggleTrayPin()
+    return
+  }
+
+  // Ctrl+Enter centres the window — the Mac's ⌘↩. Useful after summoning onto
+  // a different monitor than the one you left it on.
+  if (key === 'enter') {
+    e.preventDefault()
+    void centreWindow()
     return
   }
 
@@ -1988,6 +2043,9 @@ function openSettings() {
   checkbox('setting-hide-on-blur').checked = settings.hideOnBlur
   dropdown('setting-date-style').value = settings.dateDisplayStyle
   dropdown('setting-link-preview').value = settings.linkPreview
+  dropdown('setting-density').value = settings.listDensity
+  dropdown('setting-text-size').value = String(settings.interfaceTextSize)
+  checkbox('setting-fade-focus').checked = settings.fadeFocusHighlight
   dropdown('setting-trash-age').value = String(settings.trashMaxAgeDays)
   el<HTMLInputElement>('setting-template-date').value = settings.templateDateFormat
   updateTemplateDatePreview()
@@ -2011,6 +2069,23 @@ function updateTemplateDatePreview() {
   const rendered = pattern.replace(/yyyy|MMMM|MM|dd|EEEE/g, (t) => map[t] ?? t)
   el('setting-template-date-preview').textContent =
     `Preview: ${rendered}  ·  tokens: yyyy MM dd MMMM EEEE`
+}
+
+/// Row padding per density, matching the Mac's own values.
+const DENSITY_PADDING: Record<string, string> = { compact: '1px', cozy: '5px', comfy: '10px' }
+
+/// The chrome scale — the list, the search box, the footer. Deliberately not
+/// the note text, which has its own zoom: the two are different jobs, and
+/// wanting bigger UI is not the same as wanting bigger prose.
+function applyChromeSettings() {
+  document.documentElement.style.setProperty(
+    '--envy-row-padding',
+    DENSITY_PADDING[settings.listDensity] ?? DENSITY_PADDING.compact,
+  )
+  document.documentElement.style.setProperty(
+    '--envy-ui-scale',
+    String(settings.interfaceTextSize),
+  )
 }
 
 /// Binds a checkbox to a boolean setting, persisting it and running whatever
@@ -2062,6 +2137,22 @@ dropdown('setting-date-style').onchange = (e) => {
   saveSetting('dateDisplayStyle', settings.dateDisplayStyle)
   renderList()
 }
+
+dropdown('setting-density').onchange = (e) => {
+  settings.listDensity = (e.target as HTMLSelectElement).value
+  saveSetting('listDensity', settings.listDensity)
+  applyChromeSettings()
+}
+
+dropdown('setting-text-size').onchange = (e) => {
+  settings.interfaceTextSize = Number((e.target as HTMLSelectElement).value)
+  saveSetting('interfaceTextSize', settings.interfaceTextSize)
+  applyChromeSettings()
+}
+
+bindToggle('setting-fade-focus', 'fadeFocusHighlight', () =>
+  document.body.classList.toggle('fade-focus', settings.fadeFocusHighlight),
+)
 
 dropdown('setting-link-preview').onchange = (e) => {
   settings.linkPreview = (e.target as HTMLSelectElement).value
@@ -2171,6 +2262,8 @@ try {
 
 async function boot() {
   syncTheme()
+  applyChromeSettings()
+  document.body.classList.toggle('fade-focus', settings.fadeFocusHighlight)
   applyZoom()
   applyPlainTextMode()
   applyLayout()

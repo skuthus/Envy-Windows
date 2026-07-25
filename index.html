@@ -163,9 +163,18 @@
             <label>
               Date format
               <select id="setting-date-style">
-                <option value="smart">Smart</option>
-                <option value="absolute">Absolute</option>
                 <option value="relative">Relative</option>
+                <option value="smart">Smart</option>
+                <option value="dateTime">Date and Time</option>
+                <option value="dateOnly">Date Only</option>
+              </select>
+            </label>
+            <label>
+              Density
+              <select id="setting-density">
+                <option value="compact">Compact</option>
+                <option value="cozy">Cozy</option>
+                <option value="comfy">Comfy</option>
               </select>
             </label>
             <label>
@@ -240,6 +249,22 @@
                 <option value="vertical">Vertical (list above note)</option>
                 <option value="horizontal">Horizontal (list beside note)</option>
               </select>
+            </label>
+            <label>
+              Interface text size
+              <select id="setting-text-size">
+                <option value="0.8">Extra Small</option>
+                <option value="0.9">Small</option>
+                <option value="0.95">Medium</option>
+                <option value="1">Large (Default)</option>
+                <option value="1.15">Extra Large</option>
+                <option value="1.3">XX Large</option>
+                <option value="1.5">XXX Large</option>
+              </select>
+            </label>
+            <label>
+              <input type="checkbox" id="setting-fade-focus" />
+              Fade out focus highlight
             </label>
             <label>
               Theme

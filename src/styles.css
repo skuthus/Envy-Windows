@@ -5,6 +5,14 @@
 
 * { box-sizing: border-box; }
 
+:root {
+  /* Chrome scale and row padding, driven from Settings. Separate from the
+     editor's own zoom: wanting bigger UI is not the same as wanting bigger
+     prose, and the Mac keeps them apart for the same reason. */
+  --envy-ui-scale: 1;
+  --envy-row-padding: 1px;
+}
+
 /* --- Scrollbars ------------------------------------------------------------
    Overlay-style: the track is always invisible and the thumb only appears
    while the pointer is over the pane it belongs to, so a scrollbar never sits
@@ -116,6 +124,38 @@ html, body {
    height. Horizontal is the alternate (Ctrl+Shift+L), a sidebar list beside
    the note. */
 
+/* Chrome scales with the Interface Text Size setting. The editor is excluded —
+   it has its own zoom. */
+#search-bar,
+#list-pane,
+#note-title-bar,
+#footer,
+#interlinks { font-size: calc(1rem * var(--envy-ui-scale)); }
+.row-title { font-size: calc(13px * var(--envy-ui-scale)); }
+.row-date, .row-due { font-size: calc(11px * var(--envy-ui-scale)); }
+#search { font-size: calc(15px * var(--envy-ui-scale)); }
+
+/* --- Focus highlight -------------------------------------------------------
+   A border around whichever pane has keyboard focus. With "fade out" on it
+   dissolves after a moment, so it reads as a brief "you're here now" rather
+   than a permanent outline around wherever the cursor happens to be. */
+#list-pane, #editor-pane {
+  outline: var(--envy-focus-thickness, 3px) solid transparent;
+  outline-offset: -3px;
+  transition: outline-color 120ms ease;
+}
+#list-pane:focus-within, #editor-pane:focus-within {
+  outline-color: var(--envy-focus-highlight);
+}
+body.fade-focus #list-pane:focus-within,
+body.fade-focus #editor-pane:focus-within {
+  animation: envy-focus-fade 1.4s ease-out forwards;
+}
+@keyframes envy-focus-fade {
+  0%, 30% { outline-color: var(--envy-focus-highlight); }
+  100% { outline-color: transparent; }
+}
+
 #panes { display: flex; flex: 1; min-height: 0; min-width: 0; }
 #panes.vertical { flex-direction: column; }
 #panes.horizontal { flex-direction: row; }
@@ -181,7 +221,7 @@ html, body {
   grid-template-columns: 1fr auto auto;
   align-items: baseline;
   gap: 8px;
-  padding: 3px 12px;
+  padding: var(--envy-row-padding) 12px;
   cursor: default;
 }
 .row.highlighted { background: var(--envy-selection); }
@@ -270,7 +310,14 @@ html, body {
   border-radius: 6px;
   background: transparent;
   color: var(--envy-text);
+  text-overflow: ellipsis;
 }
+/* A title too long for the bar scrolls its full text on hover rather than
+   staying ellipsised — the bar shrinks as tags and due pills claim the row, so
+   truncation is common, and a title you can't read is a title you can't check.
+   The scrolling itself is driven from JS, which can measure the actual
+   overflow; CSS can't. */
+#note-title.scrolling { text-overflow: clip; }
 #note-title:hover { border-color: color-mix(in srgb, var(--envy-marker) 50%, transparent); }
 #note-title:focus {
   outline: none;
