@@ -1,0 +1,13 @@
+[package]
+name = "envy-core"
+description = "The note model and store — the platform-agnostic half of Envy."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+fancy-regex.workspace = true
+rayon.workspace = true
+notify.workspace = true
+serde.workspace = true
+chrono.workspace = true

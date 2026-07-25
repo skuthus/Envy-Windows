@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/envy-core"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Skyler Schoos"]
+
+[workspace.dependencies]
+# fancy-regex rather than the `regex` crate: every pattern in MarkdownStyler
+# and Note is transcribed verbatim from the macOS source, and several of them
+# rely on look-around — `(?<![\w#])#(...)` for tags, `(?<![\w])@(...)(?!\w)`
+# for due tokens, `(?<!\*)\*(...)\*(?!\*)` for italics. The `regex` crate
+# deliberately does not support look-around at all, so using it would mean
+# rewriting those patterns into a different shape and re-deriving their edge
+# cases from scratch — which is exactly how a port quietly stops matching the
+# original. fancy-regex backtracks (so it forfeits `regex`'s linear-time
+# guarantee), but these run over one note's content at a time, not the whole
+# Index, and fidelity to the Mac behavior is worth more here than asymptotics.
+fancy-regex = "0.14"
+rayon = "1.10"
+notify = "7"
+serde = { version = "1", features = ["derive"] }
+chrono = "0.4"
