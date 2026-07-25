@@ -18,7 +18,6 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Weekday};
-use fancy_regex::Regex;
 
 use crate::due::parse_flexible_date;
 use crate::note::{AiProvenance, Note};
@@ -132,19 +131,46 @@ fn fast_contains(haystack: &str, needle: &str) -> bool {
     haystack.contains(needle)
 }
 
-/// Compiled once per query rather than per note. The Swift builds this regex
-/// inside the per-note predicate, which recompiles it for every note in the
-/// Index on every keystroke; hoisting it is a pure win with no behavior change.
-fn whole_word_regex(phrase: &str) -> Option<Regex> {
-    let pattern = format!(
-        r"(?i)(?<![\p{{L}}\p{{N}}_]){}(?![\p{{L}}\p{{N}}_])",
-        fancy_regex::escape(phrase)
-    );
-    Regex::new(&pattern).ok()
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
-fn whole_word_matches(re: &Regex, haystack: &str) -> bool {
-    re.find(haystack).ok().flatten().is_some()
+/// Whether `needle` appears in `haystack` on word boundaries.
+///
+/// Both are already lowercased by the caller, so this is a plain substring
+/// scan plus a check of the characters either side — no regex at all.
+///
+/// It *was* a regex, mirroring the Mac's `(?<![\p{L}\p{N}_])…(?!…)`. On a
+/// 5,000-note vault that made a quoted phrase search cost 131 ms against
+/// well under 1 ms for every other query — a hundred and sixty times the next
+/// slowest thing, and far too slow for something that runs on every keystroke.
+/// The Mac gets away with the pattern because NSRegularExpression is ICU;
+/// `fancy-regex` backtracks, and it does so across every note's full text.
+///
+/// The boundary rule is unchanged, which is what matters: a closed-quote
+/// search for "nee" still finds the word *nee* and not the *nee* inside
+/// *needed*.
+fn whole_word_contains(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    let mut from = 0;
+    while let Some(rel) = haystack[from..].find(needle) {
+        let start = from + rel;
+        let end = start + needle.len();
+        let before_ok = haystack[..start].chars().next_back().is_none_or(|c| !is_word_char(c));
+        let after_ok = haystack[end..].chars().next().is_none_or(|c| !is_word_char(c));
+        if before_ok && after_ok {
+            return true;
+        }
+        // Advance by one char, not one byte, or a multi-byte character here
+        // would panic on a non-boundary slice.
+        from = start + haystack[start..].chars().next().map_or(1, char::len_utf8);
+        if from >= haystack.len() {
+            break;
+        }
+    }
+    false
 }
 
 /// The `[start, end)` window a `date:` query resolves to — a single calendar
@@ -284,8 +310,11 @@ struct GroupQuery {
     exclude_links: Vec<String>,
     orphan_only: bool,
     linked_only: bool,
-    phrase_terms: Vec<Regex>,
-    exclude_phrases: Vec<Regex>,
+    /// Closed-quote phrases, matched on word boundaries. Already lowercased,
+    /// like the haystacks they run against — the whole query is lowered before
+    /// tokenizing.
+    phrase_terms: Vec<String>,
+    exclude_phrases: Vec<String>,
     exclude_terms: Vec<String>,
     free_terms: Vec<String>,
 }
@@ -390,9 +419,7 @@ impl GroupQuery {
                 let phrase = unquote(&rest);
                 if !phrase.is_empty() {
                     if rest.chars().count() >= 2 && rest.ends_with('"') {
-                        if let Some(re) = whole_word_regex(&phrase) {
-                            q.exclude_phrases.push(re);
-                        }
+                        q.exclude_phrases.push(phrase);
                     } else {
                         q.exclude_terms.push(phrase);
                     }
@@ -403,9 +430,7 @@ impl GroupQuery {
                 let phrase = unquote(t);
                 if !phrase.is_empty() {
                     if t.chars().count() >= 2 && t.ends_with('"') {
-                        if let Some(re) = whole_word_regex(&phrase) {
-                            q.phrase_terms.push(re);
-                        }
+                        q.phrase_terms.push(phrase);
                     } else {
                         q.free_terms.push(phrase);
                     }
@@ -496,7 +521,7 @@ fn matched<'a>(notes: &'a [Note], group: &str, ctx: &SearchContext) -> Vec<(&'a 
                 if !q
                     .phrase_terms
                     .iter()
-                    .all(|re| whole_word_matches(re, t) || whole_word_matches(re, c))
+                    .all(|p| whole_word_contains(t, p) || whole_word_contains(c, p))
                 {
                     return None;
                 }
@@ -506,7 +531,7 @@ fn matched<'a>(notes: &'a [Note], group: &str, ctx: &SearchContext) -> Vec<(&'a 
                 if q
                     .exclude_phrases
                     .iter()
-                    .any(|re| whole_word_matches(re, t) || whole_word_matches(re, c))
+                    .any(|p| whole_word_contains(t, p) || whole_word_contains(c, p))
                 {
                     return None;
                 }
@@ -715,6 +740,35 @@ mod tests {
         let notes = vec![note("A", "she was nee Smith"), note("B", "it was needed")];
         // Closed → the word "nee", not the "nee" inside "needed".
         assert_eq!(titles(&notes, "\"nee\""), vec!["A"]);
+    }
+
+    #[test]
+    fn closed_quote_keeps_scanning_past_a_rejected_hit() {
+        // "needed" comes first and fails the boundary check. A scanner that
+        // gave up on the first substring hit would miss the real word later on.
+        let notes = vec![note("A", "it was needed, she was nee Smith")];
+        assert_eq!(titles(&notes, "\"nee\""), vec!["A"]);
+    }
+
+    #[test]
+    fn closed_quote_handles_multibyte_neighbours() {
+        // The rejected-hit rewind advances by a character, not a byte — these
+        // would panic on a non-boundary slice otherwise. And é is a letter, so
+        // it must block the boundary exactly as an ASCII letter does.
+        let notes = vec![
+            note("Accent", "the café au lait"),
+            note("Glued", "the caférie"),
+            note("Emoji", "the 🎈 café 🎈"),
+        ];
+        let mut got = titles(&notes, "\"café\"");
+        got.sort();
+        assert_eq!(got, vec!["Accent", "Emoji"]);
+    }
+
+    #[test]
+    fn closed_quote_matches_at_the_very_start_and_end() {
+        let notes = vec![note("Edges", "nee")];
+        assert_eq!(titles(&notes, "\"nee\""), vec!["Edges"]);
     }
 
     #[test]

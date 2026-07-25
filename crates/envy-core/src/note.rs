@@ -45,8 +45,35 @@ pub enum AiProvenance {
 // definition across a module boundary would be a worse coupling than two that
 // are individually correct.
 
-static TAG_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?<![\w#])#([A-Za-z0-9_-]+)").unwrap());
+/// Whether the character immediately before `at` would make this a mid-word
+/// match rather than a real token.
+///
+/// This is the `(?<![\w])` that `TAG_RE` and `DUE_RE` used to carry. It was
+/// moved out of the patterns because `fancy-regex` falls back to its own
+/// backtracking engine for any expression containing look-around, and
+/// delegates everything else to the linear-time `regex` engine. Those two were
+/// the only patterns in this file with look-around, and on a 5,000-note vault
+/// they cost 126 ms and 140 ms to derive against 2 ms for the look-around-free
+/// patterns over the same text — a one-time hit, but paid on the first
+/// keystroke of a search.
+///
+/// The matching rule is unchanged: `word#tag` is still not a tag, `##heading`
+/// is still not a tag, and `foo@today` is still not a due token.
+fn preceded_by_word_char(text: &str, at: usize) -> bool {
+    text[..at]
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+}
+
+fn followed_by_word_char(text: &str, at: usize) -> bool {
+    text[at..]
+        .chars()
+        .next()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
+}
+
+static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#([A-Za-z0-9_-]+)").unwrap());
 
 static WIKI_LINK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[\[([^\[\]]+)\]\]").unwrap());
@@ -59,7 +86,7 @@ static UNCHECKED_TASK_RE: LazyLock<Regex> =
 
 static DUE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"(?i)(?<![\w])@(today|tomorrow|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|[0-9/-]+)(?!\w)",
+        r"(?i)@(today|tomorrow|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|[0-9/-]+)",
     )
     .unwrap()
 });
@@ -192,7 +219,17 @@ impl Note {
             TAG_RE
                 .captures_iter(&self.content)
                 .filter_map(|c| c.ok())
-                .filter_map(|c| c.get(1).map(|m| m.as_str().to_lowercase()))
+                .filter_map(|c| {
+                    let start = c.get(0)?.start();
+                    // `#` itself is excluded as well as word characters, so
+                    // the second `#` of a `## Heading` doesn't open a tag.
+                    if preceded_by_word_char(&self.content, start)
+                        || self.content[..start].ends_with('#')
+                    {
+                        return None;
+                    }
+                    c.get(1).map(|m| m.as_str().to_lowercase())
+                })
                 .collect()
         })
     }
@@ -260,9 +297,19 @@ impl Note {
     /// the text. That was a real bug, not a design choice.
     pub fn active_due_dates(&self) -> &[NaiveDate] {
         self.derived.active_due_dates.get_or_init(|| {
+            // The boundary check that used to be `(?<![\w])…(?!\w)` inside the
+            // pattern. Discarding a match here can't hide an overlapping one:
+            // every match starts with `@`, and no alternation branch contains
+            // an `@`, so nothing can start inside a rejected match.
             let matches: Vec<_> = DUE_RE
                 .captures_iter(&self.content)
                 .filter_map(|c| c.ok())
+                .filter(|c| {
+                    c.get(0).is_some_and(|m| {
+                        !preceded_by_word_char(&self.content, m.start())
+                            && !followed_by_word_char(&self.content, m.end())
+                    })
+                })
                 .collect();
             // Most notes have no due token at all — skip both exclusion scans
             // entirely rather than always paying for them to find nothing.
@@ -374,6 +421,36 @@ mod tests {
         let n = note("# Heading\n## Also heading\nA #real tag and #another-one.\nNot mid#word.");
         let tags: Vec<_> = n.tags().iter().cloned().collect();
         assert_eq!(tags, vec!["another-one".to_string(), "real".to_string()]);
+    }
+
+    /// The boundary rules used to live inside the patterns as look-around.
+    /// These pin the cases where hand-rolling them could have diverged: a
+    /// rejected match must not swallow a real one that follows, and a trailing
+    /// non-word character must still be allowed to end a token.
+    #[test]
+    fn tag_boundaries_survive_a_rejected_match() {
+        // "##no" is rejected; "#yes" right after it must still be found.
+        let n = note("##no #yes\nmid#word #tail");
+        let tags: Vec<_> = n.tags().iter().cloned().collect();
+        assert_eq!(tags, vec!["tail".to_string(), "yes".to_string()]);
+    }
+
+    #[test]
+    fn due_token_needs_a_word_boundary_on_both_sides() {
+        // Trailing word character → not a token.
+        assert!(note("ship it @todays").due().is_none());
+        assert!(note("ship it @2026-01-01x").due().is_none());
+        // Leading word character → not a token.
+        assert!(note("email me@today").due().is_none());
+        // A trailing non-word character is fine, and must not eat the token.
+        assert!(note("ship it @today.").due().is_some());
+        assert!(note("(@today)").due().is_some());
+    }
+
+    #[test]
+    fn a_rejected_due_token_does_not_hide_a_later_one() {
+        let n = note("not @todayx but really @today");
+        assert_eq!(n.active_due_dates().len(), 1);
     }
 
     #[test]
