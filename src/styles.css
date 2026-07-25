@@ -195,6 +195,14 @@ html, body {
   vertical-align: middle;
 }
 .ai-badge { margin-left: 6px; color: var(--envy-blockquote); }
+.pin-mark { margin-right: 5px; font-size: 10px; }
+
+#settings-panel .setting-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--envy-blockquote);
+}
 
 /* `min-height: 0` and `min-width: 0` are both load-bearing, not defensive. A
    flex item defaults to `min-*: auto`, meaning it refuses to shrink below its

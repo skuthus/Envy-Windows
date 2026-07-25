@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 
 use envy_core::{IndexWatcher, NoteStore, SearchContext};
 use serde::Serialize;
-use tauri::{Emitter, Manager, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{Emitter, Manager, State, WebviewWindow};
+use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
 
 /// A note as the frontend sees it. The store's `Note` isn't serialized
 /// directly — its derived values are lazy and private, and the UI wants them
@@ -339,10 +342,130 @@ fn reload(state: State<AppState>) -> usize {
     store.notes().len()
 }
 
+/// The summon hotkey.
+///
+/// `Ctrl+Alt+Enter` is the Windows spelling of the Mac's `⌥⌘↩`: ⌘ maps to
+/// Ctrl and ⌥ to Alt, so the shape of the chord is preserved rather than the
+/// literal keys. Registration is best-effort — another app may already own the
+/// combination, and a note-taking app failing to launch over a hotkey clash
+/// would be a poor trade. It is not yet remappable; that needs the shortcuts
+/// settings surface.
+fn setup_global_hotkey(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri_plugin_global_shortcut::{
+        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
+    };
+
+    let summon = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Enter);
+    let handle = app.clone();
+    app.plugin(
+        tauri_plugin_global_shortcut::Builder::new()
+            .with_handler(move |_app, shortcut, event| {
+                // Fire on press only; without this the chord toggles twice per
+                // use and lands back where it started.
+                if event.state() != ShortcutState::Pressed {
+                    return;
+                }
+                if shortcut.matches(Modifiers::CONTROL | Modifiers::ALT, Code::Enter) {
+                    if let Some(window) = handle.get_webview_window("main") {
+                        toggle_window(&window);
+                    }
+                }
+            })
+            .build(),
+    )?;
+
+    if let Err(e) = app.global_shortcut().register(summon) {
+        eprintln!("could not register the summon hotkey (Ctrl+Alt+Enter): {e}");
+    }
+    Ok(())
+}
+
+/// The notification-area icon — Windows' counterpart to the Mac's menu bar
+/// item. Left click toggles the window, exactly as the hotkey does; the menu
+/// is for the things a click can't express.
+fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let show = MenuItem::with_id(app, "show", "Show Envy", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Envy", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &quit])?;
+
+    TrayIconBuilder::with_id("main")
+        .icon(app.default_window_icon().cloned().ok_or("no window icon")?)
+        .tooltip("Envy")
+        .menu(&menu)
+        // Without this a left click opens the menu instead of reaching the
+        // click handler, and the single most common gesture would be wrong.
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => {
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.unminimize();
+                    let _ = w.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                if let Some(w) = tray.app_handle().get_webview_window("main") {
+                    toggle_window(&w);
+                }
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+/// Show-or-hide, the behaviour the summon hotkey and the tray click share.
+///
+/// Hiding rather than minimising is deliberate: Envy is meant to be summoned
+/// and dismissed, so it should leave the taskbar and Alt-Tab entirely rather
+/// than sit there as a minimised window you then have to find.
+fn toggle_window(window: &WebviewWindow) {
+    let visible = window.is_visible().unwrap_or(false);
+    let focused = window.is_focused().unwrap_or(false);
+    if visible && focused {
+        let _ = window.hide();
+    } else {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        // The search box is where a summon should land — the point of
+        // summoning is to type.
+        let _ = window.emit("focus-search", ());
+    }
+}
+
+/// Whether the app launches at login.
+#[tauri::command]
+fn autostart_enabled(app: tauri::AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+fn set_autostart(enabled: bool, app: tauri::AppHandle) -> Result<(), String> {
+    let manager = app.autolaunch();
+    if enabled {
+        manager.enable().map_err(|e| e.to_string())
+    } else {
+        manager.disable().map_err(|e| e.to_string())
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             let dir = default_index_directory();
             let store = NoteStore::open(&dir, false)?;
@@ -383,6 +506,9 @@ pub fn run() {
                 suppress_until,
                 _watcher: Mutex::new(watcher),
             });
+
+            setup_global_hotkey(app.handle())?;
+            setup_tray(app.handle())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -403,6 +529,8 @@ pub fn run() {
             create_inbox_note,
             set_include_subfolders,
             reveal_index,
+            autostart_enabled,
+            set_autostart,
             reload,
         ])
         .run(tauri::generate_context!())

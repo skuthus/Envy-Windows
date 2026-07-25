@@ -1,0 +1,12 @@
+[package]
+name = "icon-generator"
+description = "Renders the Envy app icon at every size Windows asks for."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[dependencies]
+# A pure-Rust 2D rasteriser. Needed rather than downscaling one master image
+# because the icon is *tuned* per size — see the Tuning struct.
+tiny-skia = "0.11"
+ico = "0.4"

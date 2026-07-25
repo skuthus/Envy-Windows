@@ -609,7 +609,7 @@ function formatDue(iso: string): string {
 
 function renderList() {
   countEl.textContent = results.length ? String(results.length) : ''
-  results = sortNotes(results)
+  results = applyPinning(sortNotes(results))
   listEl.replaceChildren(
     ...results.map((note, i) => {
       const row = document.createElement('div')
@@ -628,6 +628,13 @@ function renderList() {
         dot.className = 'inbox-dot'
         dot.title = 'Fleeting note'
         title.prepend(dot)
+      }
+      if (pinnedIds.has(note.id)) {
+        const pin = document.createElement('span')
+        pin.className = 'pin-mark'
+        pin.textContent = '📌'
+        pin.title = 'Pinned to the top of the list'
+        title.prepend(pin)
       }
       if (note.aiProvenance !== 'none') {
         const badge = document.createElement('span')
@@ -791,6 +798,45 @@ async function openHighlighted() {
   if (!target) return
   await openNote(target.id)
   renderList()
+}
+
+// --- Pinning ----------------------------------------------------------------
+// A pinned note stays at the top of the list regardless of sort. Membership is
+// the app's own state rather than anything written into the file — pinning is
+// about how *you* want the list arranged, not about the note's content, and
+// writing a marker into someone's prose to record a UI preference would be
+// the wrong trade.
+
+const pinnedIds = new Set<string>(
+  JSON.parse(localStorage.getItem('pinnedIds') ?? '[]') as string[],
+)
+
+function persistPins() {
+  localStorage.setItem('pinnedIds', JSON.stringify([...pinnedIds]))
+}
+
+/// Pinned notes first, each group keeping the order the sort produced.
+function applyPinning(notes: NoteDto[]): NoteDto[] {
+  if (pinnedIds.size === 0) return notes
+  const pinned = notes.filter((n) => pinnedIds.has(n.id))
+  const rest = notes.filter((n) => !pinnedIds.has(n.id))
+  return [...pinned, ...rest]
+}
+
+function togglePin() {
+  const target = results[highlighted]
+  if (!target) return
+  if (pinnedIds.has(target.id)) pinnedIds.delete(target.id)
+  else pinnedIds.add(target.id)
+  persistPins()
+  renderList()
+  // Keep the highlight on the note that just moved, rather than on whatever
+  // row happens to sit at the old index now.
+  const moved = results.findIndex((n) => n.id === target.id)
+  if (moved >= 0) {
+    highlighted = moved
+    renderList()
+  }
 }
 
 // --- Query shapes -----------------------------------------------------------
@@ -1027,6 +1073,13 @@ window.addEventListener('keydown', (e) => {
   if (!e.ctrlKey) return
   const key = e.key.toLowerCase()
 
+  // Ctrl+Alt+P pins or unpins — the Windows spelling of ⌥⌘P.
+  if (e.altKey && key === 'p') {
+    e.preventDefault()
+    togglePin()
+    return
+  }
+
   // Ctrl+, opens Settings — the Windows spelling of ⌘,.
   if (key === ',') {
     e.preventDefault()
@@ -1091,6 +1144,12 @@ void listen('index-changed', async () => {
   }
 })
 
+// Summoning should land in the search box — the point of summoning is to type.
+void listen('focus-search', () => {
+  searchInput.focus()
+  searchInput.select()
+})
+
 // Envious ships a light and a dark face. Following the OS is the default —
 // `AppearanceMode.system` on the Mac — but an explicit choice pins it.
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
@@ -1112,6 +1171,9 @@ const settingsEl = document.getElementById('settings')!
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
 
 function openSettings() {
+  void invoke<boolean>('autostart_enabled').then((on) => {
+    el<HTMLInputElement>('setting-autostart').checked = on
+  })
   el<HTMLInputElement>('setting-preview').checked = settings.showNotePreview
   el<HTMLInputElement>('setting-date').checked = settings.showDateModified
   el<HTMLInputElement>('setting-due').checked = settings.showDueSort
@@ -1164,6 +1226,19 @@ el<HTMLSelectElement>('setting-theme').onchange = (e) => {
   syncTheme()
 }
 el('settings-open-folder').onclick = () => void invoke('reveal_index')
+
+// Autostart is the one setting whose truth lives outside the app — it's a
+// registry entry the user (or another tool) can change behind our back — so
+// it's read from the system when Settings opens rather than cached here.
+el<HTMLInputElement>('setting-autostart').onchange = async (e) => {
+  const box = e.target as HTMLInputElement
+  try {
+    await invoke('set_autostart', { enabled: box.checked })
+  } catch (err) {
+    console.error('autostart failed', err)
+    box.checked = !box.checked
+  }
+}
 
 window.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !settingsEl.classList.contains('hidden')) closeSettings()

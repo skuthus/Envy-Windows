@@ -63,6 +63,8 @@ with a welcome note.
 
 | Keys | Action |
 |---|---|
+| `Ctrl+Alt+Enter` | Show or hide Envy — works from any app |
+| `Ctrl+Alt+P` | Pin or unpin the highlighted note |
 | `Ctrl+L` | Jump to the search box |
 | `↑` / `↓` | Move the highlighted note |
 | `Return` | Open the top match, or create a note from what you typed |
