@@ -8,10 +8,13 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import {
   embedHost,
   envyStyler,
+  plainTextField,
   refreshEmbeds,
   searchQueryField,
+  setPlainText,
   setSearchQuery,
 } from './styler'
+import { autoPairing, completionTransforms, emphasisKeymap, pairingEdit } from './input'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 
 interface NoteDto {
@@ -68,9 +71,15 @@ const view = new EditorView({
       history(),
       drawSelection(),
       rectangularSelection(),
+      // Before the default keymap, so Ctrl+B/I reach emphasis rather than the
+      // default binding for those chords.
+      keymap.of(emphasisKeymap),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
+      completionTransforms,
+      autoPairing,
       searchQueryField,
+      plainTextField,
       embedHost.of({
         // Resolved by title on every mount rather than handed a pre-fetched
         // note, so "the source was renamed" and "the source doesn't exist
@@ -772,6 +781,40 @@ function renderList() {
       return row
     }),
   )
+}
+
+// --- Zoom and plain-text mode -----------------------------------------------
+
+/// Editor text size, independent of the interface. Notes are what you read for
+/// hours; the chrome isn't.
+let editorZoom = Number(localStorage.getItem('editorFontZoom') ?? '1')
+
+function applyZoom() {
+  const base = Number.parseFloat(enviousDark.fontSize)
+  document.documentElement.style.setProperty(
+    '--envy-font-size',
+    `${(base * editorZoom).toFixed(2)}px`,
+  )
+  saveSetting('editorFontZoom', editorZoom)
+  view.requestMeasure()
+}
+
+function setZoom(next: number) {
+  // Clamped so a stuck key can't leave the editor unreadably small or absurdly
+  // large with no obvious way back short of clearing storage.
+  editorZoom = Math.min(2.5, Math.max(0.6, next))
+  applyZoom()
+}
+
+/// Plain-text mode shows the raw markdown instead of styling it — for when you
+/// want to see exactly what's in the file rather than what it means.
+let plainTextMode = boolSetting('plainTextMode', false)
+
+function applyPlainTextMode() {
+  saveSetting('plainTextMode', plainTextMode)
+  // Nothing else to change: the styler simply stops emitting decorations, so
+  // the text, cursor and scroll position all stay exactly where they were.
+  view.dispatch({ effects: setPlainText.of(plainTextMode) })
 }
 
 // --- Inbox ------------------------------------------------------------------
@@ -1539,6 +1582,32 @@ window.addEventListener('keydown', (e) => {
     else void deleteHighlighted()
     return
   }
+  // Zoom the note text — Ctrl +/-/0, the Windows spelling of ⌘+/-/0. Both
+  // "=" and "+" so it works without Shift on most layouts.
+  if (key === '=' || key === '+') {
+    e.preventDefault()
+    setZoom(editorZoom + 0.1)
+    return
+  }
+  if (key === '-') {
+    e.preventDefault()
+    setZoom(editorZoom - 0.1)
+    return
+  }
+  if (key === '0') {
+    e.preventDefault()
+    setZoom(1)
+    return
+  }
+
+  // Ctrl+Shift+P toggles plain-text mode — the Mac's ⌘⇧P.
+  if (e.shiftKey && key === 'p') {
+    e.preventDefault()
+    plainTextMode = !plainTextMode
+    applyPlainTextMode()
+    return
+  }
+
   // Ctrl+Shift+B toggles the interlinks panel — the Mac's ⌘⇧B.
   if (e.shiftKey && key === 'b') {
     e.preventDefault()
@@ -1838,6 +1907,8 @@ try {
 
 async function boot() {
   syncTheme()
+  applyZoom()
+  applyPlainTextMode()
   applyLayout()
   renderSortHeader()
   // The backend keeps the tray pin only in memory, so hand it back the value
@@ -1881,6 +1952,7 @@ async function boot() {
   // "not registered" and prove nothing.
   setSearchQuery,
   searchQueryField,
+  pairingEdit,
   previewInterlinks(data: InterlinksDto, expanded = true) {
     currentInterlinks = data
     interlinksExpanded = expanded

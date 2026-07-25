@@ -74,6 +74,9 @@ with a welcome note.
 | `Ctrl`-click a `[[link]]` | Open the linked note, creating it if needed |
 | `Ctrl+Backspace` | Delete the highlighted note |
 | `Ctrl+Shift+Backspace` | Restore the last deleted note(s) |
+| `Ctrl+B` / `Ctrl+I` | Bold / italicise the selection (wraps, or unwraps) |
+| `Ctrl+Shift+P` | Toggle plain-text mode |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom the note text in, out, or reset |
 | `Ctrl+Shift+B` | Toggle the interlinks panel |
 | `Ctrl+Shift+L` | Toggle vertical / horizontal layout |
 | `Ctrl+,` | Settings |

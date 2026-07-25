@@ -37,6 +37,21 @@ export const allowEmbeds = Facet.define<boolean, boolean>({
 /// triggers a redecorate like any other change.
 export const setSearchQuery = StateEffect.define<string>()
 
+/// Plain-text mode: show the markdown as written, styling nothing.
+///
+/// A toggle rather than a separate view, so the text, cursor and scroll
+/// position are all exactly where they were — the only thing that changes is
+/// whether the styler runs.
+export const setPlainText = StateEffect.define<boolean>()
+
+export const plainTextField = StateField.define<boolean>({
+  create: () => false,
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setPlainText)) return e.value
+    return value
+  },
+})
+
 export const searchQueryField = StateField.define<string>({
   create: () => '',
   update(value, tr) {
@@ -446,6 +461,10 @@ function wikiLinkTarget(body: string): string {
 }
 
 function buildDecorations(view: EditorView): DecorationSet {
+  // Plain-text mode styles nothing at all — not even the search highlight,
+  // since the point is to see the file exactly as it is.
+  if (view.state.field(plainTextField, false)) return Decoration.none
+
   const marks: Mark[] = []
   const doc = view.state.doc
 
@@ -676,14 +695,15 @@ function buildDecorations(view: EditorView): DecorationSet {
 const embedDecorations = StateField.define<DecorationSet>({
   create: (state) => buildEmbedDecorations(state),
   update(value, tr) {
-    if (!tr.docChanged) return value.map(tr.changes)
+    const modeChanged = tr.effects.some((e) => e.is(setPlainText))
+    if (!tr.docChanged && !modeChanged) return value.map(tr.changes)
     return buildEmbedDecorations(tr.state)
   },
   provide: (f) => EditorView.decorations.from(f),
 })
 
 function buildEmbedDecorations(state: EditorState): DecorationSet {
-  if (!state.facet(allowEmbeds)) return Decoration.none
+  if (!state.facet(allowEmbeds) || state.field(plainTextField, false)) return Decoration.none
   const host = state.facet(embedHost)
   const hostNoteId = host?.currentNoteId() ?? null
   const text = state.doc.toString()
@@ -719,7 +739,7 @@ const stylerPlugin = ViewPlugin.fromClass(
       // arrives as a bare effect with no doc or selection change at all, so it
       // has to be checked for explicitly or the highlights never appear.
       const queryChanged = update.transactions.some((tr) =>
-        tr.effects.some((e) => e.is(setSearchQuery)),
+        tr.effects.some((e) => e.is(setSearchQuery) || e.is(setPlainText)),
       )
       // Focus is an input to the reveal rule now, so gaining or losing it has
       // to redecorate — otherwise markers stay revealed after clicking away.
