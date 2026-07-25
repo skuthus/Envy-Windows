@@ -3,7 +3,7 @@ import { EditorState, Compartment } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { envyStyler } from './styler'
+import { envyStyler, searchQueryField, setSearchQuery } from './styler'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 
 interface NoteDto {
@@ -62,6 +62,7 @@ const view = new EditorView({
       rectangularSelection(),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
+      searchQueryField,
       envyStyler,
       EditorView.domEventHandlers({
         mousedown: (event, v) => {
@@ -766,6 +767,8 @@ async function openHighlightedTemplate() {
 }
 
 async function runSearch() {
+  // Push the query into the editor so matches light up in the open note.
+  view.dispatch({ effects: setSearchQuery.of(searchInput.value) })
   const fragment = templateFragment()
   if (fragment !== null) {
     templateResults = await invoke<TemplateDto[]>('list_templates', { fragment })
@@ -1443,6 +1446,12 @@ async function boot() {
   // browser without a backend behind them.
   openContextMenu,
   noteMenuItems,
+  // The app's *own* references. A dynamic import of the styler from a console
+  // yields a separate module record under Vite, and separate StateField
+  // identities with it — so a test importing it directly would find the field
+  // "not registered" and prove nothing.
+  setSearchQuery,
+  searchQueryField,
   previewInterlinks(data: InterlinksDto, expanded = true) {
     currentInterlinks = data
     interlinksExpanded = expanded

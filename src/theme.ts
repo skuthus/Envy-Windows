@@ -38,6 +38,15 @@ export interface EnvyTheme {
   tag: string
   tagBackground: string
   highlight: string
+  /// Ink for text sitting on `highlight`.
+  ///
+  /// The Mac computes this at style time, flipping to black or white when the
+  /// existing foreground would be unreadable over the highlight. CSS cannot
+  /// measure contrast, so it becomes a paired token instead: one deliberate
+  /// choice per theme rather than a calculation. Amber highlights want dark
+  /// ink in both faces, which is why both values agree today — a theme with a
+  /// dark highlight would set it differently.
+  highlightText: string
   /// The note list's selection highlight.
   selection: string
   /// The editor's own text-selection background. A separate token from
@@ -74,6 +83,7 @@ export const enviousDark: EnvyTheme = {
   tag: 'rgb(52, 199, 89)',
   tagBackground: 'rgba(48, 209, 88, 0.153)',
   highlight: 'rgb(255, 188, 0)',
+  highlightText: 'rgb(32, 29, 24)',
   selection: 'rgb(90, 128, 255)',
   selectedText: 'rgb(255, 75, 57)',
   focusHighlight: 'rgba(152, 168, 217, 0.25)',
@@ -105,6 +115,7 @@ export const enviousLight: EnvyTheme = {
   tag: 'rgb(23, 132, 58)',
   tagBackground: 'rgba(23, 132, 58, 0.13)',
   highlight: 'rgba(255, 188, 0, 0.55)',
+  highlightText: 'rgb(32, 29, 24)',
   selection: 'rgba(27, 79, 216, 0.18)',
   selectedText: 'rgba(212, 42, 28, 0.22)',
   focusHighlight: 'rgba(96, 122, 176, 0.30)',

@@ -1,6 +1,20 @@
 import { Decoration, DecorationSet, EditorView, ViewPlugin, ViewUpdate, WidgetType } from '@codemirror/view'
-import { Range } from '@codemirror/state'
+import { Range, StateEffect, StateField } from '@codemirror/state'
 import { resolveDueToken, urgencyFor } from './due'
+
+/// The live search query, pushed in from the search box so matches can be
+/// highlighted in the open note. Held in editor state rather than a module
+/// variable so a query change goes through the normal update cycle and
+/// triggers a redecorate like any other change.
+export const setSearchQuery = StateEffect.define<string>()
+
+export const searchQueryField = StateField.define<string>({
+  create: () => '',
+  update(value, tr) {
+    for (const e of tr.effects) if (e.is(setSearchQuery)) return e.value
+    return value
+  },
+})
 
 // Patterns transcribed verbatim from MarkdownStyler.swift. Every one of them
 // is JS-compatible as written — including the lookbehinds, which WebView2
@@ -100,6 +114,112 @@ function selectionTouches(view: EditorView, from: number, to: number): boolean {
     if (r.from <= to && r.to >= from) return true
   }
   return false
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/// The same quote-aware tokenizer the search itself uses, so what lights up
+/// matches what was searched. A naive space split would treat a quoted phrase
+/// as the literal string `"build"`, quotes and all, and highlight nothing.
+function tokenizeQuery(q: string): string[] {
+  const out: string[] = []
+  let current = ''
+  let inQuotes = false
+  for (const ch of q) {
+    if (ch === '"') {
+      inQuotes = !inQuotes
+      current += ch
+    } else if (ch === ' ' && !inQuotes) {
+      if (current) out.push(current)
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  if (current) out.push(current)
+  return out
+}
+
+/// Ranges in `text` that the query matches, for highlighting.
+///
+/// Each word highlights independently: a scattered multi-word AND search has
+/// no single contiguous phrase to find in the first place. Operators that name
+/// nothing literal in a note's text — `date:`, `due:`, `link:`, `orphan:` —
+/// highlight nothing, because there is nothing in the prose that corresponds
+/// to them.
+function searchMatchRanges(text: string, query: string): Array<[number, number]> {
+  const trimmed = query.trim()
+  if (!trimmed || !text) return []
+  const out: Array<[number, number]> = []
+
+  const addPattern = (pattern: string) => {
+    let re: RegExp
+    try {
+      // The `u` flag is load-bearing, not decoration: `\p{L}` and `\p{N}` are
+      // only Unicode property escapes in unicode mode. Without it they parse
+      // as a character class of the literal characters p, {, L, } — so the
+      // word-boundary guard silently stops guarding, and a closed-quote search
+      // for "nee" lights up the "nee" inside "needed".
+      re = new RegExp(pattern, 'gui')
+    } catch {
+      return
+    }
+    for (const m of text.matchAll(re)) {
+      if (m[0].length > 0) out.push([m.index!, m.index! + m[0].length])
+    }
+  }
+  const addLiteral = (literal: string) => addPattern(escapeRegex(literal))
+
+  for (const token of tokenizeQuery(trimmed)) {
+    const lowered = token.toLowerCase()
+    if (
+      lowered.startsWith('link:') ||
+      lowered.startsWith('-link:') ||
+      lowered === 'orphan:' ||
+      lowered === 'linked:' ||
+      lowered.startsWith('date:') ||
+      lowered.startsWith('due:')
+    ) {
+      continue
+    }
+
+    if (token.startsWith('"') || token.startsWith('-"')) {
+      // An exclusion highlights nothing. A *closed* quote matched on word
+      // boundaries, so it highlights on word boundaries too — otherwise
+      // "nee" would light up inside "needed" in a note that only matched the
+      // whole word. An open, still-being-typed quote highlights as the
+      // substring it matched as.
+      if (token.startsWith('-')) continue
+      const phrase = token.replace(/^"/, '').replace(/"$/, '')
+      if (!phrase) continue
+      if (token.length >= 2 && token.endsWith('"')) {
+        addPattern(`(?<![\\p{L}\\p{N}_])${escapeRegex(phrase)}(?![\\p{L}\\p{N}_])`)
+      } else {
+        addLiteral(phrase)
+      }
+      continue
+    }
+
+    if (lowered.startsWith('tag:')) {
+      // "tag:techn" matches "#technology", so highlight just the matched
+      // substring inside each qualifying tag rather than the tag's whole
+      // extent — consistent with a plain search only lighting up what was
+      // actually typed.
+      const name = lowered.slice('tag:'.length)
+      if (!name) continue
+      for (const m of text.matchAll(/(?<![\w#])#[A-Za-z0-9_-]+/g)) {
+        const at = m[0].toLowerCase().indexOf(name)
+        if (at < 0) continue
+        out.push([m.index! + at, m.index! + at + name.length])
+      }
+      continue
+    }
+
+    addLiteral(token)
+  }
+  return out
 }
 
 function buildDecorations(view: EditorView): DecorationSet {
@@ -298,6 +418,19 @@ function buildDecorations(view: EditorView): DecorationSet {
     }
   }
 
+  // Search highlights go on last so they layer over whatever styling a span
+  // already has — a match can land on bold text, a link, a tag or plain prose,
+  // and it should read as a match in every one of those.
+  const query = view.state.field(searchQueryField, false) ?? ''
+  if (query.trim()) {
+    for (const [base, spanEnd] of spans) {
+      const text = doc.sliceString(base, spanEnd)
+      for (const [s, e] of searchMatchRanges(text, query)) {
+        marks.push({ from: base + s, to: base + e, deco: mark('envy-search-match') })
+      }
+    }
+  }
+
   marks.sort((a, b) => a.from - b.from || a.to - b.to)
   return Decoration.set(
     marks.map((m) => m.deco.range(m.from, m.to)) as Range<Decoration>[],
@@ -313,8 +446,13 @@ export const envyStyler = ViewPlugin.fromClass(
     }
     update(update: ViewUpdate) {
       // Selection changes matter as much as doc changes — the reveal-on-cursor
-      // rule above is driven entirely by where the cursor is.
-      if (update.docChanged || update.viewportChanged || update.selectionSet) {
+      // rule above is driven entirely by where the cursor is. A query change
+      // arrives as a bare effect with no doc or selection change at all, so it
+      // has to be checked for explicitly or the highlights never appear.
+      const queryChanged = update.transactions.some((tr) =>
+        tr.effects.some((e) => e.is(setSearchQuery)),
+      )
+      if (update.docChanged || update.viewportChanged || update.selectionSet || queryChanged) {
         this.decorations = buildDecorations(update.view)
       }
     }

@@ -668,6 +668,18 @@ body.popover {
 }
 .envy-completed-task { color: var(--envy-completed-task); text-decoration: line-through; }
 
+/* --- Search matches -------------------------------------------------------
+   Layered over whatever styling the span already has — a match can land on
+   bold text, a link, a tag or plain prose. The forced ink is why: without it a
+   match on a blue link or a green tag would keep that colour on an amber
+   ground and become the least readable text on screen, which is the opposite
+   of what a highlight is for. */
+.envy-search-match {
+  background: var(--envy-highlight);
+  color: var(--envy-highlight-text) !important;
+  border-radius: 2px;
+}
+
 /* --- Footnotes / rules --------------------------------------------------- */
 .envy-footnote { color: var(--envy-footnote); font-size: 0.9em; }
 .envy-hr { color: var(--envy-marker); }
