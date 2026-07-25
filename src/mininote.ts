@@ -13,6 +13,7 @@ import { EditorView, keymap } from '@codemirror/view'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { allowEmbeds, envyStyler, searchQueryField } from './styler'
 import { autoPairing, completionTransforms, emphasisKeymap } from './input'
+import { bindingFor } from './shortcuts'
 
 export interface MiniNote {
   id: string
@@ -69,7 +70,10 @@ export function createMiniNoteEditor(
         envyStyler,
         completionTransforms,
         autoPairing,
-        keymap.of(emphasisKeymap),
+        // Embeds and previews follow the same remapped bindings as the main
+        // editor — a shortcut that works in one and not the other would be
+        // worse than not having it here at all.
+        keymap.of(emphasisKeymap(bindingFor('bold'), bindingFor('italic'))),
         history(),
         keymap.of([...defaultKeymap, ...historyKeymap]),
         editable.of(EditorView.editable.of(false)),

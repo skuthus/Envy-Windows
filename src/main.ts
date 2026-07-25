@@ -28,6 +28,19 @@ import {
 import { applyTheme, enviousDark, enviousLight } from './theme'
 import { createMiniNoteEditor, type MiniNoteEditor } from './mininote'
 import { renderReference, type ReferenceTab } from './reference'
+import {
+  SHORTCUT_SPECS,
+  bindingFor,
+  conflicts,
+  displayBinding,
+  eventToBinding,
+  globalBindings,
+  isModifierOnly,
+  matches as matchesShortcut,
+  resetAllBindings,
+  setBinding,
+  type ShortcutId,
+} from './shortcuts'
 
 interface NoteDto {
   id: string
@@ -75,6 +88,17 @@ let openNoteSavedContent = ''
 let saveTimer: number | undefined
 
 const editable = new Compartment()
+/// The emphasis bindings live in a compartment because they're remappable, and
+/// a keymap facet can't be changed after the editor is built.
+const emphasisKeys = new Compartment()
+
+function applyEditorKeymap() {
+  view.dispatch({
+    effects: emphasisKeys.reconfigure(
+      keymap.of(emphasisKeymap(bindingFor('bold'), bindingFor('italic'))),
+    ),
+  })
+}
 
 const view = new EditorView({
   state: EditorState.create({
@@ -83,9 +107,10 @@ const view = new EditorView({
       history(),
       drawSelection(),
       rectangularSelection(),
-      // Before the default keymap, so Ctrl+B/I reach emphasis rather than the
-      // default binding for those chords.
-      keymap.of(emphasisKeymap),
+      // Before the default keymap, so emphasis wins over the default binding
+      // for those chords. In a compartment because the bindings are
+      // remappable, and a facet can't be changed after the fact.
+      emphasisKeys.of(keymap.of(emphasisKeymap(bindingFor('bold'), bindingFor('italic')))),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
       completionTransforms,
@@ -1840,102 +1865,56 @@ function closeEditor() {
   })
 }
 
-window.addEventListener('keydown', (e) => {
-  if (!e.ctrlKey) return
-  const key = e.key.toLowerCase()
-
-  // Ctrl+Alt+P pins to the top of the list — the Windows spelling of ⌥⌘P.
-  if (e.altKey && !e.shiftKey && key === 'p') {
-    e.preventDefault()
-    togglePin()
-    return
-  }
-
-  // Ctrl+Alt+T pins the highlighted note to the tray.
-  //
-  // Deliberately not Ctrl+Alt+Shift+P, which would be the tidier pairing:
-  // that chord is registered as a *global* shortcut for unpinning (matching
-  // the Mac's ⌥⌘⇧P), and a global shortcut fires even while Envy is focused.
-  // Binding both to one chord would have them fight, pinning and unpinning in
-  // the same keystroke.
-  if (e.altKey && key === 't') {
-    e.preventDefault()
-    void toggleTrayPin()
-    return
-  }
-
-  // Ctrl+Enter centres the window — the Mac's ⌘↩. Useful after summoning onto
-  // a different monitor than the one you left it on.
-  if (key === 'enter') {
-    e.preventDefault()
-    void centreWindow()
-    return
-  }
-
-  // Ctrl+, opens Settings — the Windows spelling of ⌘,.
-  if (key === ',') {
-    e.preventDefault()
+// Every app-level binding, dispatched through the shortcut registry rather
+// than by testing keys here. A handler that checks `e.key === 'l'` directly is
+// a binding nobody can remap and nobody can find.
+const SHORTCUT_HANDLERS: Partial<Record<ShortcutId, () => void>> = {
+  togglePin,
+  pinToTray: () => void toggleTrayPin(),
+  centerWindow: () => void centreWindow(),
+  openSettings: () => {
     if (settingsEl.classList.contains('hidden')) openSettings()
     else closeSettings()
-    return
-  }
-
-  // Delete is Ctrl+Backspace and restore is Ctrl+Shift+Backspace, matching the
-  // Mac's ⌘⌫ / ⌘⇧⌫. Deliberately not the bare Del key, which Windows
-  // convention would suggest — inside the editor Del is forward-delete, and a
-  // shortcut that destroys the note you're typing in depending on focus is a
-  // bad trade for idiom.
-  if (key === 'backspace') {
-    e.preventDefault()
-    if (e.shiftKey) void restoreDeleted()
-    // Deletes everything selected, which is just the one note in the common
-    // case — so there's no separate single-delete path to drift out of step.
-    else void deleteSelection()
-    return
-  }
-  // Zoom the note text — Ctrl +/-/0, the Windows spelling of ⌘+/-/0. Both
-  // "=" and "+" so it works without Shift on most layouts.
-  if (key === '=' || key === '+') {
-    e.preventDefault()
-    setZoom(editorZoom + 0.1)
-    return
-  }
-  if (key === '-') {
-    e.preventDefault()
-    setZoom(editorZoom - 0.1)
-    return
-  }
-  if (key === '0') {
-    e.preventDefault()
-    setZoom(1)
-    return
-  }
-
-  // Ctrl+Shift+P toggles plain-text mode — the Mac's ⌘⇧P.
-  if (e.shiftKey && key === 'p') {
-    e.preventDefault()
+  },
+  // Delete is Ctrl+Backspace rather than the bare Del key Windows convention
+  // would suggest: inside the editor Del is forward-delete, and a shortcut
+  // that destroys the note you are typing in depending on focus is a bad
+  // trade for idiom.
+  deleteNote: () => void deleteSelection(),
+  restoreDeletedNote: () => void restoreDeleted(),
+  zoomIn: () => setZoom(editorZoom + 0.1),
+  zoomOut: () => setZoom(editorZoom - 0.1),
+  actualSize: () => setZoom(1),
+  togglePlainTextMode: () => {
     plainTextMode = !plainTextMode
     applyPlainTextMode()
-    return
-  }
-
-  // Ctrl+Shift+B toggles the interlinks panel — the Mac's ⌘⇧B.
-  if (e.shiftKey && key === 'b') {
-    e.preventDefault()
-    interlinksToggleEl.click()
-    return
-  }
-
-  // Ctrl+Shift+L toggles vertical / horizontal, the Windows spelling of ⌘⇧L.
-  // Checked before plain Ctrl+L, which would otherwise swallow it.
-  if (e.shiftKey && key === 'l') {
-    e.preventDefault()
-    toggleLayout()
-  } else if (key === 'l') {
-    // Ctrl+L jumps to the search box from anywhere — the Mac's ⌘L.
-    e.preventDefault()
+  },
+  toggleInterlinks: () => interlinksToggleEl.click(),
+  toggleLayout,
+  jumpToSearch: () => {
     searchInput.focus()
     searchInput.select()
+  },
+  clearSearch: () => {
+    searchInput.value = ''
+    void runSearch()
+  },
+  focusNextArea: () => {
+    if (document.activeElement === searchInput) view.focus()
+    else searchInput.focus()
+  },
+  focusPreviousArea: () => {
+    if (document.activeElement === searchInput) view.focus()
+    else searchInput.focus()
+  },
+}
+
+window.addEventListener('keydown', (e) => {
+  for (const [id, run] of Object.entries(SHORTCUT_HANDLERS)) {
+    if (!matchesShortcut(id as ShortcutId, e)) continue
+    e.preventDefault()
+    run?.()
+    return
   }
 })
 
@@ -2093,6 +2072,8 @@ function openSettings() {
   dropdown('setting-density').value = settings.listDensity
   dropdown('setting-text-size').value = String(settings.interfaceTextSize)
   checkbox('setting-fade-focus').checked = settings.fadeFocusHighlight
+  recording = null
+  renderShortcutSettings()
   dropdown('setting-trash-age').value = String(settings.trashMaxAgeDays)
   el<HTMLInputElement>('setting-template-date').value = settings.templateDateFormat
   updateTemplateDatePreview()
@@ -2219,6 +2200,104 @@ el<HTMLInputElement>('setting-template-date').oninput = () => {
   void invoke('set_template_date_format', { pattern: settings.templateDateFormat })
 }
 
+// --- Shortcut recorder -------------------------------------------------------
+
+/// Pushes the three global bindings to Rust, which re-registers them with the
+/// OS. Called on boot too, so defaults and remaps take the same path and can't
+/// drift apart.
+async function syncGlobalShortcuts() {
+  const g = globalBindings()
+  const failed = await invoke<string[]>('set_global_shortcuts', {
+    summon: g.summonApp,
+    showPinned: g.showPinnedNote,
+    unpin: g.unpinFromTray,
+  })
+  if (failed.length > 0) {
+    console.warn('these global shortcuts could not be registered:', failed)
+  }
+  return failed
+}
+
+let recording: ShortcutId | null = null
+
+function renderShortcutSettings() {
+  const clashes = conflicts()
+  const list = el('shortcut-list')
+  list.replaceChildren(
+    ...SHORTCUT_SPECS.map((spec) => {
+      const row = document.createElement('div')
+      row.className = 'shortcut-row'
+      row.append(el2('span', 'shortcut-label', spec.label))
+
+      const button = document.createElement('button')
+      button.type = 'button'
+      const binding = bindingFor(spec.id)
+      const clashing = clashes.has(binding)
+      button.className =
+        'shortcut-key' +
+        (recording === spec.id ? ' recording' : '') +
+        (clashing ? ' clashing' : '')
+      button.textContent =
+        recording === spec.id ? 'Press keys…' : displayBinding(binding) || 'Unset'
+      button.onclick = () => {
+        recording = recording === spec.id ? null : spec.id
+        renderShortcutSettings()
+      }
+      row.append(button)
+      return row
+    }),
+  )
+
+  const note = el('shortcut-conflicts')
+  note.textContent =
+    clashes.size === 0
+      ? ''
+      : `Conflicting: ${[...clashes.values()]
+          .map((ids) => ids.map((i) => SHORTCUT_SPECS.find((s) => s.id === i)?.label).join(' / '))
+          .join('; ')} — only one of each pair will fire.`
+}
+
+function el2(tag: string, className: string, text: string): HTMLElement {
+  const n = document.createElement(tag)
+  n.className = className
+  n.textContent = text
+  return n
+}
+
+// Capture phase, and before the app's own shortcut dispatch: while recording,
+// every chord belongs to the recorder — otherwise pressing Ctrl+L to bind it
+// would jump to the search box instead.
+window.addEventListener(
+  'keydown',
+  (e) => {
+    if (!recording) return
+    e.preventDefault()
+    e.stopPropagation()
+    if (e.key === 'Escape') {
+      recording = null
+      renderShortcutSettings()
+      return
+    }
+    // Bare modifiers are ignored, or the recorder captures "Ctrl" the instant
+    // you reach for a chord.
+    if (isModifierOnly(e)) return
+    const id = recording
+    setBinding(id, eventToBinding(e))
+    recording = null
+    renderShortcutSettings()
+    if (SHORTCUT_SPECS.find((s) => s.id === id)?.global) void syncGlobalShortcuts()
+    if (SHORTCUT_SPECS.find((s) => s.id === id)?.editor) applyEditorKeymap()
+  },
+  true,
+)
+
+el('shortcut-reset').onclick = () => {
+  resetAllBindings()
+  renderShortcutSettings()
+  void syncGlobalShortcuts()
+  applyEditorKeymap()
+}
+
 el('open-markup').onclick = () => openReference('markup')
 el('open-shortcuts').onclick = () => openReference('shortcuts')
 el('open-emoji').onclick = () => openReference('emoji')
@@ -2332,6 +2411,9 @@ async function boot() {
     await invoke('set_include_subfolders', { include: true })
   }
   await invoke('set_template_date_format', { pattern: settings.templateDateFormat })
+  // Registers the global chords with the OS. Nothing is registered in Rust at
+  // startup, so this is the only path — defaults and remaps go the same way.
+  await syncGlobalShortcuts()
   // Swept at launch rather than on a timer: a note app isn't reliably running
   // when a timer would fire, and "cleared next time you opened Envy" is both
   // easier to reason about and impossible to miss.

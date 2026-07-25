@@ -391,7 +391,19 @@ function toggleEmphasis(marker: string): Command {
   }
 }
 
-export const emphasisKeymap: KeyBinding[] = [
-  { key: 'Mod-b', run: toggleEmphasis('**'), preventDefault: true },
-  { key: 'Mod-i', run: toggleEmphasis('*'), preventDefault: true },
-]
+/// Translates a binding string like "Ctrl+Shift+B" into CodeMirror's own key
+/// notation, so the same registry drives both the window handler and the
+/// editor's keymap.
+function toCodeMirrorKey(binding: string): string {
+  return binding
+    .split('+')
+    .map((part) => (part === 'Ctrl' ? 'Ctrl' : part === 'Alt' ? 'Alt' : part))
+    .join('-')
+}
+
+export function emphasisKeymap(bold: string, italic: string): KeyBinding[] {
+  return [
+    { key: toCodeMirrorKey(bold), run: toggleEmphasis('**'), preventDefault: true },
+    { key: toCodeMirrorKey(italic), run: toggleEmphasis('*'), preventDefault: true },
+  ]
+}

@@ -817,6 +817,36 @@ body.popover {
   background: color-mix(in srgb, var(--envy-due-overdue) 18%, transparent);
 }
 .setting-row { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0; }
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+}
+.shortcut-label { flex: 1; min-width: 0; font-size: 12.5px; }
+.shortcut-key {
+  font-family: 'Cascadia Code', Consolas, ui-monospace, monospace;
+  font-size: 11px;
+  min-width: 12ch;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: var(--envy-code-background);
+  color: var(--envy-text);
+  cursor: default;
+}
+.shortcut-key:hover { border-color: var(--envy-link); }
+.shortcut-key.recording {
+  border-color: var(--envy-link);
+  background: color-mix(in srgb, var(--envy-link) 22%, transparent);
+}
+/* A clash means one of the two can never fire, so it's marked rather than
+   left to be discovered by a shortcut mysteriously doing nothing. */
+.shortcut-key.clashing {
+  border-color: var(--envy-due-overdue);
+  color: var(--envy-due-overdue);
+}
 #settings-panel input[type='text'] {
   margin-left: auto;
   font: inherit;

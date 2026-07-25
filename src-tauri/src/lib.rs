@@ -79,6 +79,10 @@ pub struct AppState {
     suppress_until: Arc<Mutex<Instant>>,
     /// Held only to keep the watch alive; dropping it stops the watcher.
     _watcher: Mutex<Option<IndexWatcher>>,
+    /// Registered global shortcuts, keyed by the shortcut's own id, so the
+    /// handler dispatches by lookup rather than re-testing chords it would
+    /// then have to keep in step with the frontend's list.
+    global_shortcuts: Mutex<std::collections::HashMap<u32, String>>,
     /// The `{{date}}` pattern, mirrored from the frontend's settings.
     ///
     /// Needed here because the tray's "New Pinned Note from Template" builds a
@@ -612,6 +616,103 @@ fn reload(state: State<AppState>) -> usize {
     store.notes().len()
 }
 
+/// Parses a binding like "Ctrl+Alt+Shift+P" into a Shortcut.
+///
+/// The string form comes from the frontend, which is where remapping happens;
+/// this is the one place it becomes an OS registration.
+fn parse_shortcut(binding: &str) -> Option<tauri_plugin_global_shortcut::Shortcut> {
+    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
+
+    let mut mods = Modifiers::empty();
+    let mut code = None;
+    for part in binding.split('+') {
+        match part.trim() {
+            "Ctrl" => mods |= Modifiers::CONTROL,
+            "Alt" => mods |= Modifiers::ALT,
+            "Shift" => mods |= Modifiers::SHIFT,
+            "Enter" => code = Some(Code::Enter),
+            "Space" => code = Some(Code::Space),
+            "Backspace" => code = Some(Code::Backspace),
+            "ArrowDown" => code = Some(Code::ArrowDown),
+            "ArrowUp" => code = Some(Code::ArrowUp),
+            "ArrowLeft" => code = Some(Code::ArrowLeft),
+            "ArrowRight" => code = Some(Code::ArrowRight),
+            other if other.len() == 1 => {
+                let c = other.chars().next().unwrap().to_ascii_uppercase();
+                code = match c {
+                    'A'..='Z' => Some(letter_code(c)),
+                    '0'..='9' => Some(digit_code(c)),
+                    ',' => Some(Code::Comma),
+                    '.' => Some(Code::Period),
+                    '-' => Some(Code::Minus),
+                    '=' => Some(Code::Equal),
+                    _ => None,
+                };
+            }
+            _ => {}
+        }
+    }
+    code.map(|c| Shortcut::new(if mods.is_empty() { None } else { Some(mods) }, c))
+}
+
+fn letter_code(c: char) -> tauri_plugin_global_shortcut::Code {
+    use tauri_plugin_global_shortcut::Code::*;
+    const LETTERS: [tauri_plugin_global_shortcut::Code; 26] = [
+        KeyA, KeyB, KeyC, KeyD, KeyE, KeyF, KeyG, KeyH, KeyI, KeyJ, KeyK, KeyL, KeyM, KeyN, KeyO,
+        KeyP, KeyQ, KeyR, KeyS, KeyT, KeyU, KeyV, KeyW, KeyX, KeyY, KeyZ,
+    ];
+    LETTERS[(c as u8 - b'A') as usize]
+}
+
+fn digit_code(c: char) -> tauri_plugin_global_shortcut::Code {
+    use tauri_plugin_global_shortcut::Code::*;
+    const DIGITS: [tauri_plugin_global_shortcut::Code; 10] = [
+        Digit0, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9,
+    ];
+    DIGITS[(c as u8 - b'0') as usize]
+}
+
+/// Re-registers the global shortcuts after a remap.
+///
+/// Everything is unregistered first: leaving the old chord live would mean a
+/// remap adds a binding rather than moves one, and the previous one would keep
+/// firing with no way to find out why.
+#[tauri::command]
+fn set_global_shortcuts(
+    summon: String,
+    show_pinned: String,
+    unpin: String,
+    app: tauri::AppHandle,
+    state: State<AppState>,
+) -> Vec<String> {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    let _ = app.global_shortcut().unregister_all();
+    let mut failed = Vec::new();
+    let mut registry = state.global_shortcuts.lock().unwrap();
+    registry.clear();
+
+    for (id, binding) in [
+        ("summonApp", summon),
+        ("showPinnedNote", show_pinned),
+        ("unpinFromTray", unpin),
+    ] {
+        let Some(shortcut) = parse_shortcut(&binding) else {
+            failed.push(binding);
+            continue;
+        };
+        // Registered individually so one clash doesn't cost the others.
+        if app.global_shortcut().register(shortcut).is_err() {
+            failed.push(binding.clone());
+        }
+        // Keyed by the shortcut's own id so the handler can dispatch by
+        // lookup rather than by re-testing modifier combinations it would
+        // then have to keep in step with the frontend's list.
+        registry.insert(shortcut.id(), id.to_string());
+    }
+    failed
+}
+
 /// The summon hotkey.
 ///
 /// `Ctrl+Alt+Enter` is the Windows spelling of the Mac's `⌥⌘↩`: ⌘ maps to
@@ -621,18 +722,7 @@ fn reload(state: State<AppState>) -> usize {
 /// would be a poor trade. It is not yet remappable; that needs the shortcuts
 /// settings surface.
 fn setup_global_hotkey(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> {
-    use tauri_plugin_global_shortcut::{
-        Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
-    };
-
-    const CTRL_ALT: Modifiers = Modifiers::CONTROL.union(Modifiers::ALT);
-
-    let summon = Shortcut::new(Some(CTRL_ALT), Code::Enter);
-    let show_pinned = Shortcut::new(Some(CTRL_ALT), Code::ArrowDown);
-    let unpin = Shortcut::new(
-        Some(CTRL_ALT.union(Modifiers::SHIFT)),
-        Code::KeyP,
-    );
+    use tauri_plugin_global_shortcut::ShortcutState;
 
     let handle = app.clone();
     app.plugin(
@@ -643,35 +733,36 @@ fn setup_global_hotkey(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error:
                 if event.state() != ShortcutState::Pressed {
                     return;
                 }
-                if shortcut.matches(CTRL_ALT, Code::Enter) {
-                    if let Some(window) = handle.get_webview_window("main") {
-                        toggle_window(&window);
+                // Dispatched by lookup rather than by re-testing chords here,
+                // so remapping needs no change on this side at all.
+                let action = handle.try_state::<AppState>().and_then(|s| {
+                    s.global_shortcuts.lock().unwrap().get(&shortcut.id()).cloned()
+                });
+                match action.as_deref() {
+                    Some("summonApp") => {
+                        if let Some(window) = handle.get_webview_window("main") {
+                            toggle_window(&window);
+                        }
                     }
-                } else if shortcut.matches(CTRL_ALT, Code::ArrowDown) {
-                    toggle_pinned_window(&handle);
-                } else if shortcut.matches(CTRL_ALT.union(Modifiers::SHIFT), Code::KeyP) {
-                    if let Some(state) = handle.try_state::<AppState>() {
-                        *state.pinned_note.lock().unwrap() = None;
+                    Some("showPinnedNote") => toggle_pinned_window(&handle),
+                    Some("unpinFromTray") => {
+                        if let Some(state) = handle.try_state::<AppState>() {
+                            *state.pinned_note.lock().unwrap() = None;
+                        }
+                        if let Some(w) = handle.get_webview_window(PINNED_WINDOW) {
+                            let _ = w.hide();
+                        }
+                        let _ = handle.emit("pinned-note-changed", ());
+                        refresh_tray_menu(&handle);
                     }
-                    if let Some(w) = handle.get_webview_window(PINNED_WINDOW) {
-                        let _ = w.hide();
-                    }
-                    let _ = handle.emit("pinned-note-changed", ());
+                    _ => {}
                 }
             })
             .build(),
     )?;
-
-    // Registered individually so one clash doesn't cost the others.
-    for (shortcut, name) in [
-        (summon, "Ctrl+Alt+Enter (summon)"),
-        (show_pinned, "Ctrl+Alt+Down (pinned note)"),
-        (unpin, "Ctrl+Alt+Shift+P (unpin)"),
-    ] {
-        if let Err(e) = app.global_shortcut().register(shortcut) {
-            eprintln!("could not register {name}: {e}");
-        }
-    }
+    // Nothing is registered here. The frontend calls set_global_shortcuts on
+    // boot with whatever bindings are stored, so defaults and remaps take the
+    // same path and cannot drift apart.
     Ok(())
 }
 
@@ -1030,6 +1121,7 @@ pub fn run() {
                 pinned_note: Mutex::new(None),
                 suppress_until,
                 _watcher: Mutex::new(watcher),
+                global_shortcuts: Mutex::new(std::collections::HashMap::new()),
                 template_date_format: Mutex::new("yyyy-MM-dd".to_string()),
             });
 
@@ -1071,6 +1163,7 @@ pub fn run() {
             convert_to_template,
             autostart_enabled,
             set_autostart,
+            set_global_shortcuts,
             pinned_note_id,
             set_pinned_note,
             open_in_main_window,
