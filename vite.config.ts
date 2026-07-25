@@ -23,8 +23,15 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching Rust sources and build output.
+      //
+      // `target/` sits at the repo root rather than under `src-tauri/`,
+      // because this is a Cargo workspace (so `envy-core` can be its own
+      // crate). That puts it inside Vite's project root, and Vite's watcher
+      // dies with EBUSY the moment Cargo holds a lock on a build script
+      // executable it's trying to watch. The stock Tauri config only ignores
+      // `src-tauri/**`, which is correct only when `target/` lives inside it.
+      ignored: ["**/src-tauri/**", "**/target/**", "**/crates/**"],
     },
   },
 }));

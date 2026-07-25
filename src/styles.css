@@ -1,116 +1,297 @@
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
+/* Every color here is a var fed from theme.ts, which transcribes Theme.swift.
+   Nothing is hardcoded — the point is that Envy's theme model (a flat set of
+   named color tokens) maps onto CSS custom properties one-to-one, so the
+   existing theme gallery ports as pure data. */
 
-.logo.typescript:hover {
-  filter: drop-shadow(0 0 2em #2d79c7);
-}
-:root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
+* { box-sizing: border-box; }
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
-
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  -webkit-text-size-adjust: 100%;
-}
-
-.container {
+html, body {
   margin: 0;
-  padding-top: 10vh;
+  height: 100%;
+  background: var(--envy-background);
+  color: var(--envy-text);
+  font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+}
+
+/* --- App shell -----------------------------------------------------------
+   One search box on top, list and editor side by side beneath it. The Mac
+   supports flipping this to a vertical split (⌘⇧L); that's not wired up yet,
+   so the layout is intentionally a single flex row for now rather than a
+   half-built abstraction. */
+
+#app { display: flex; flex-direction: column; height: 100%; }
+
+#search-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--envy-title-bar-background);
+  border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 40%, transparent);
+}
+#search {
+  flex: 1;
+  font: inherit;
+  font-size: 15px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: color-mix(in srgb, var(--envy-marker) 12%, transparent);
+  color: var(--envy-text);
+}
+#search:focus {
+  outline: none;
+  border-color: var(--envy-link);
+  box-shadow: 0 0 0 3px var(--envy-focus-highlight, transparent);
+}
+#search::placeholder { color: var(--envy-marker); }
+#count {
+  min-width: 2ch;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--envy-blockquote);
+}
+
+/* Vertical is the primary layout and the default — list on top, note beneath,
+   the Notational Velocity arrangement Envy is built around. `layoutMode`
+   defaults to `.vertical` on the Mac and the split starts at 0.6 of the
+   height. Horizontal is the alternate (Ctrl+Shift+L), a sidebar list beside
+   the note. */
+
+#panes { display: flex; flex: 1; min-height: 0; min-width: 0; }
+#panes.vertical { flex-direction: column; }
+#panes.horizontal { flex-direction: row; }
+
+#list {
+  overflow-y: auto;
+  background: var(--envy-file-list-background);
+}
+/* The list is the sized pane in both orientations; the editor takes the rest.
+   Sizing the same element either way keeps one persisted fraction meaningful
+   per orientation rather than needing to translate between them. */
+#panes.vertical > #list { height: 60%; flex: none; border-bottom: none; }
+#panes.horizontal > #list { width: 280px; flex: none; min-width: 220px; }
+
+#divider {
+  flex: none;
+  background: color-mix(in srgb, var(--envy-marker) 40%, transparent);
+  transition: background 120ms ease;
+}
+#divider:hover,
+#divider.dragging { background: var(--envy-link); }
+#panes.vertical > #divider { height: 1px; cursor: row-resize; padding: 2px 0; background-clip: content-box; }
+#panes.horizontal > #divider { width: 1px; cursor: col-resize; padding: 0 2px; background-clip: content-box; }
+#divider:focus-visible { outline: 2px solid var(--envy-link); outline-offset: 1px; }
+
+/* Compact by default — `listDensity` is `.compact` and `showNotePreview` is
+   false on the Mac, so one dense line per note is the real default row, not a
+   two-line card. */
+.row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: 8px;
+  padding: 3px 12px;
+  cursor: default;
+}
+.row.highlighted { background: var(--envy-selection); }
+.row.highlighted .row-date,
+.row.highlighted .row-meta,
+.row.highlighted .ai-badge { color: inherit; opacity: 0.8; }
+.row-title {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-date {
+  font-size: 11px;
+  color: var(--envy-blockquote);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.row-meta {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: var(--envy-blockquote);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row-due { font-size: 11px; font-weight: 600; white-space: nowrap; }
+.inbox-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--envy-due-soon);
+  vertical-align: middle;
+}
+.ai-badge { margin-left: 6px; color: var(--envy-blockquote); }
+
+#editor-pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  text-align: center;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
+#note-title-bar {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 28px;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--envy-title-bar-background);
+  border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 30%, transparent);
+}
+
+/* Overlaid rather than swapped with the editor. CodeMirror measures itself on
+   construction, and a view built inside a `display: none` parent measures as
+   zero and does not recover when the parent is later shown — the document is
+   there, laid out at no height, so the note reads as blank. Keeping #editor in
+   the layout at all times sidesteps that entirely; the empty state simply
+   covers it until a note is open. */
+#empty-state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
   justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
+  padding: 0 4ch;
   text-align: center;
+  color: var(--envy-blockquote);
+  font-size: 13px;
+  line-height: 1.6;
+  background: var(--envy-background);
+  pointer-events: none;
+}
+#empty-state.hidden { display: none; }
+
+#editor { flex: 1; min-height: 0; overflow: auto; }
+
+.cm-editor { background: var(--envy-background); height: 100%; }
+.cm-editor.cm-focused { outline: none; }
+.cm-scroller {
+  font-family: 'Cascadia Code', 'Consolas', ui-monospace, monospace;
+  font-size: 14px;
+  line-height: 1.65;
+  padding: 20px 28px 40vh;
+}
+/* CodeMirror injects its own stylesheet at runtime, *after* this file, so a
+   bare `.cm-cursor` rule here loses on equal specificity. `.cm-editor
+   .cm-cursor` outranks it.
+
+   The native caret stays transparent on purpose: drawSelection() hides it and
+   draws .cm-cursor instead, so re-enabling `caret-color` would show two. */
+.cm-editor .cm-cursor,
+.cm-editor .cm-dropCursor {
+  border-left-color: var(--envy-text);
+  border-left-width: 2px;
 }
 
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
+/* The mouse I-beam is an OS cursor and renders black regardless of the page,
+   which all but disappears on a dark ground. A white bar with a dark halo
+   reads on either, so this needs no theme switching. */
+.cm-editor .cm-content,
+.cm-editor .cm-scroller {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='28'%3E%3Cg fill='none' stroke-linecap='round'%3E%3Cpath d='M8 4V24M4.5 4h7M4.5 24h7' stroke='rgba(0,0,0,0.65)' stroke-width='4'/%3E%3Cpath d='M8 4V24M4.5 4h7M4.5 24h7' stroke='%23fff' stroke-width='1.6'/%3E%3C/g%3E%3C/svg%3E")
+      8 14,
+    text;
+}
+.cm-activeLine { background: color-mix(in srgb, var(--envy-marker) 10%, transparent); }
+.cm-selectionBackground,
+.cm-editor .cm-selectionBackground,
+::selection { background: var(--envy-selected-text) !important; }
+
+/* --- Markers -------------------------------------------------------------
+   Never removed from the document, only dimmed or replaced — the file on disk
+   is always exactly what you typed. */
+.envy-marker { color: var(--envy-marker); }
+
+/* --- Headings ------------------------------------------------------------ */
+.envy-h1 { font-size: 1.7em; font-weight: 700; }
+.envy-h2 { font-size: 1.45em; font-weight: 700; }
+.envy-h3 { font-size: 1.25em; font-weight: 600; }
+.envy-h4 { font-size: 1.1em;  font-weight: 600; }
+.envy-h5 { font-size: 1em;    font-weight: 600; }
+.envy-h6 { font-size: 0.95em; font-weight: 600; color: var(--envy-blockquote); }
+
+/* --- Emphasis ------------------------------------------------------------ */
+.envy-bold { font-weight: 700; }
+.envy-italic { font-style: italic; }
+.envy-strike { text-decoration: line-through; color: var(--envy-completed-task); }
+
+/* --- Code ---------------------------------------------------------------- */
+.envy-code {
+  background: var(--envy-code-background);
+  border-radius: 4px;
+  padding: 1px 3px;
+}
+.envy-code-block {
+  background: var(--envy-code-background);
+  border-radius: 6px;
 }
 
-button {
+/* --- Links --------------------------------------------------------------- */
+.envy-link, .envy-wikilink { color: var(--envy-link); }
+.envy-wikilink { cursor: pointer; }
+.envy-link:hover, .envy-wikilink:hover { text-decoration: underline; }
+
+/* --- Tags ---------------------------------------------------------------- */
+.envy-tag {
+  color: var(--envy-tag);
+  background: var(--envy-tag-background);
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 1px 4px;
+}
+
+/* --- Due dates -----------------------------------------------------------
+   Three tokens, not one color plus urgency logic — urgency picks the slot,
+   it never overrides what's in it. */
+.envy-due { font-weight: 600; border-radius: 4px; padding: 1px 4px; }
+.envy-due-later   { color: var(--envy-due); }
+.envy-due-soon    { color: var(--envy-due-soon); }
+.envy-due-overdue { color: var(--envy-due-overdue); }
+
+/* --- Blockquote ----------------------------------------------------------
+   A quote and a transclusion are the same idea, so 1.5.0 gave them the same
+   quiet left rule instead of a boxed card. */
+.envy-blockquote {
+  color: var(--envy-blockquote);
+  border-left: 2px solid color-mix(in srgb, var(--envy-marker) 80%, transparent);
+  padding-left: 10px;
+}
+
+/* --- Tasks --------------------------------------------------------------- */
+.envy-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.05em;
+  height: 1.05em;
+  margin-right: 0.25em;
+  vertical-align: -0.15em;
+  border: 1.5px solid var(--envy-marker);
+  border-radius: 4px;
+  font-size: 0.8em;
+  line-height: 1;
   cursor: pointer;
+  user-select: none;
 }
-
-button:hover {
-  border-color: #396cd8;
+.envy-checkbox-checked {
+  background: var(--envy-checked-checkbox);
+  border-color: var(--envy-checked-checkbox);
+  color: var(--envy-background);
 }
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
-}
+.envy-completed-task { color: var(--envy-completed-task); text-decoration: line-through; }
 
-input,
-button {
-  outline: none;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
-
-  a:hover {
-    color: #24c8db;
-  }
-
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
-}
+/* --- Footnotes / rules --------------------------------------------------- */
+.envy-footnote { color: var(--envy-footnote); font-size: 0.9em; }
+.envy-hr { color: var(--envy-marker); }
