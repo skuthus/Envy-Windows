@@ -11,6 +11,10 @@
      prose, and the Mac keeps them apart for the same reason. */
   --envy-ui-scale: 1;
   --envy-row-padding: 1px;
+  /* Kept in step with the ::-webkit-scrollbar width below. The list header sits
+     outside the scrolling element, so it has to account for the same gutter to
+     stay aligned with the rows. */
+  --envy-scrollbar-width: 10px;
 }
 
 /* --- Scrollbars ------------------------------------------------------------
@@ -185,7 +189,11 @@ body.fade-focus #editor-pane:focus-within {
   min-width: 0;
   background: var(--envy-file-list-background);
 }
-#list { flex: 1; min-height: 0; overflow-y: auto; }
+/* `scrollbar-gutter: stable` so the gutter is reserved whether or not the list
+   currently overflows. Without it the rows gain 10px the moment a search
+   narrows the results enough to remove the scrollbar, and the columns shift
+   out from under their headings as you type. */
+#list { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
 
 /* The list pane is the sized one in both orientations; the editor takes the
    rest. Sizing the same element either way keeps one persisted fraction
@@ -193,16 +201,63 @@ body.fade-focus #editor-pane:focus-within {
 #panes.vertical > #list-pane { height: 60%; flex: none; }
 #panes.horizontal > #list-pane { width: 280px; flex: none; min-width: 220px; }
 
+/* --- List columns ----------------------------------------------------------
+   The header and every row share one column definition, so a value always sits
+   under its own heading and starts at the same x on every line.
+
+   They have to share it explicitly because each row is its own grid — there is
+   no single grid spanning the list for them to be tracks of. With `auto`
+   columns that meant every row sized its own trailing columns to its own
+   content, so a row carrying a due date pushed its date left of the rows
+   without one, and the Date column visibly stepped in and out down the list.
+
+   The widths hold the longest string each formatter can produce, measured in
+   the app's own font at 11px: "Yesterday, 12:46 PM" is 96.8px and "Wednesday
+   +12" is 79px. They scale with the interface text size for the same reason
+   the fonts do.
+
+   Reserved only when there is something to put in them — the Due column
+   appears once any result actually has a due date, the Date column follows the
+   "Show date modified" setting — so a list with neither keeps the full width
+   for titles instead of holding space for columns that never fill.
+
+   Capped as a share of the pane as well, because the side-by-side layout can be
+   dragged down to 220px and the two columns at their full width would leave the
+   title nothing at all — it collapsed to zero and the dates spilled out past the
+   right edge. A percentage resolves against the grid container, which is the
+   same width for the header and every row, so the columns stay aligned with each
+   other while narrowing; the values inside ellipsize instead of overflowing. */
+#list-pane { --envy-due-col: 0px; --envy-date-col: 0px; }
+#list-pane.has-due { --envy-due-col: min(calc(86px * var(--envy-ui-scale)), 22%); }
+#list-pane.has-date { --envy-date-col: min(calc(102px * var(--envy-ui-scale)), 30%); }
+
+#list-header,
+.row {
+  display: grid;
+  /* minmax(0, 1fr) rather than 1fr: a grid track's default minimum is its
+     content, so a long title would refuse to shrink and push the columns off
+     the right edge instead of ellipsizing. */
+  grid-template-columns: minmax(0, 1fr) var(--envy-due-col) var(--envy-date-col);
+  gap: 8px;
+}
+
+/* Placed by name rather than by source order, so the Date column stays the
+   third track whether or not this particular row has a due date, and whether
+   or not the Due sort button is switched on. */
+.sort-button[data-field='name'], .row-title { grid-column: 1; }
+.sort-button[data-field='due'], .row-due { grid-column: 2; }
+.sort-button[data-field='date'], .row-date { grid-column: 3; }
+
 #list-header {
-  display: flex;
   align-items: center;
-  gap: 12px;
   padding: 8px 12px 6px;
+  /* The list below scrolls, and its scrollbar takes real layout width off the
+     rows. `scrollbar-gutter: stable` on #list makes it always do so, whether or
+     not the list currently overflows, and matching that here keeps the headings
+     over their columns instead of drifting by the scrollbar's width. */
+  padding-right: calc(12px + var(--envy-scrollbar-width));
   border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 30%, transparent);
 }
-/* Name takes the slack so Due and Date sit at the right, over the columns
-   they sort. */
-#list-header .sort-button:first-child { flex: 1; text-align: left; }
 .sort-button {
   display: inline-flex;
   align-items: center;
@@ -242,10 +297,7 @@ body.fade-focus #editor-pane:focus-within {
 #list-sizer > .row { position: absolute; left: 0; right: 0; }
 
 .row {
-  display: grid;
-  grid-template-columns: 1fr auto auto;
   align-items: baseline;
-  gap: 8px;
   padding: var(--envy-row-padding) 12px;
   cursor: default;
 }
@@ -263,11 +315,17 @@ body.fade-focus #editor-pane:focus-within {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* Left-aligned in their own fixed column rather than pushed against the right
+   edge, so every row's date begins at the same x and the column reads as a
+   column. Clipped with an ellipsis for the narrow layout, where the cap above
+   can make the track shorter than the text. */
 .row-date {
   font-size: 11px;
   color: var(--envy-blockquote);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .row-meta {
   grid-column: 1 / -1;
@@ -277,7 +335,13 @@ body.fade-focus #editor-pane:focus-within {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.row-due { font-size: 11px; font-weight: 600; white-space: nowrap; }
+.row-due {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .inbox-dot {
   display: inline-block;
   width: 6px;

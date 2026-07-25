@@ -794,6 +794,12 @@ function listViewport(): number {
 
 function renderList() {
   results = applyPinning(sortNotes(results))
+  // Which trailing columns the header and rows both reserve. The Due column is
+  // only worth its width once something actually has a due date — otherwise a
+  // list with none would hold a permanently empty column open and take that
+  // width away from the titles.
+  listPaneEl.classList.toggle('has-due', results.some((n) => n.due))
+  listPaneEl.classList.toggle('has-date', settings.showDateModified)
   // trash: and template: replace the list's children wholesale, so the spacer
   // has to be put back rather than assumed to still be there.
   if (listSizer.parentElement !== listEl) listEl.replaceChildren(listSizer)
@@ -1194,6 +1200,10 @@ function showTrashPreview(note: NoteDto | null) {
 }
 
 function renderTrashList() {
+  // Trashed rows carry a date and never a due date, so the columns are fixed
+  // regardless of what the notes list was showing before this.
+  listPaneEl.classList.remove('has-due')
+  listPaneEl.classList.add('has-date')
   listEl.replaceChildren(
     ...trashResults.map((note, i) => {
       const row = document.createElement('div')
@@ -1275,6 +1285,9 @@ let templateResults: TemplateDto[] = []
 let openTemplatePath: string | null = null
 
 function renderTemplateList() {
+  // Same as trash: a single trailing label, never a due date.
+  listPaneEl.classList.remove('has-due')
+  listPaneEl.classList.add('has-date')
   listEl.replaceChildren(
     ...templateResults.map((t, i) => {
       const row = document.createElement('div')
