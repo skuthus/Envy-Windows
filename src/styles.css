@@ -185,6 +185,10 @@ html, body {
   cursor: default;
 }
 .row.highlighted { background: var(--envy-selection); }
+/* Dimmer than the primary. The primary is the one the editor is showing, and
+   a multi-selection where every row looks identical makes it impossible to
+   tell which note you're actually looking at. */
+.row.multi-selected { background: color-mix(in srgb, var(--envy-selection) 40%, transparent); }
 .row.highlighted .row-date,
 .row.highlighted .row-meta,
 .row.highlighted .ai-badge { color: inherit; opacity: 0.8; }

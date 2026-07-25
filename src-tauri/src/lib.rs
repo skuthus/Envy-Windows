@@ -370,6 +370,26 @@ fn empty_trash(state: State<AppState>) -> usize {
     count
 }
 
+/// Deletes several notes as one action.
+///
+/// One call rather than a loop of `delete_note`, because the store treats a
+/// single `delete` as one undo step — `restore_last_deleted` brings the whole
+/// batch back. Looping would leave only the last note restorable.
+#[tauri::command]
+fn delete_notes(ids: Vec<String>, state: State<AppState>) -> Result<usize, String> {
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    let notes: Vec<_> = store
+        .notes()
+        .iter()
+        .filter(|n| ids.iter().any(|i| i == n.id()))
+        .cloned()
+        .collect();
+    let count = notes.len();
+    store.delete(&notes);
+    Ok(count)
+}
+
 #[tauri::command]
 fn restore_last_deleted(state: State<AppState>) -> Vec<NoteDto> {
     state.mark_internal_write();
@@ -1027,6 +1047,7 @@ pub fn run() {
             open_link,
             rename_note,
             delete_note,
+            delete_notes,
             restore_last_deleted,
             can_restore,
             trashed_notes,

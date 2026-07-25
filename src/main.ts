@@ -729,9 +729,14 @@ function renderList() {
   listEl.replaceChildren(
     ...results.map((note, i) => {
       const row = document.createElement('div')
-      row.className = 'row' + (i === highlighted ? ' highlighted' : '')
+      // The primary selection is marked differently from the rest: it's the
+      // one the editor is showing, and losing track of which that is makes a
+      // multi-selection feel arbitrary.
+      const selected = isSelected(note)
+      row.className =
+        'row' + (i === highlighted ? ' highlighted' : selected ? ' multi-selected' : '')
       row.setAttribute('role', 'option')
-      row.setAttribute('aria-selected', String(i === highlighted))
+      row.setAttribute('aria-selected', String(selected))
 
       const title = document.createElement('div')
       title.className = 'row-title'
@@ -797,15 +802,30 @@ function renderList() {
         row.append(meta)
       }
 
-      row.onclick = () => {
-        highlighted = i
-        void openHighlighted()
+      row.onclick = (e) => {
+        if (e.shiftKey) {
+          selectRange(i)
+          renderList()
+          void openHighlighted()
+        } else if (e.ctrlKey) {
+          toggleMultiSelect(i)
+          renderList()
+        } else {
+          selectSingle(i)
+          void openHighlighted()
+        }
       }
       row.oncontextmenu = (e) => {
         e.preventDefault()
-        // Right-clicking also moves the highlight, so the menu and the list
-        // never disagree about which note is being acted on.
-        highlighted = i
+        const selection = fullSelection()
+        // Right-clicking inside an existing multi-selection acts on the whole
+        // of it; anywhere else it collapses to that one note first, so the
+        // menu and the list never disagree about what's about to happen.
+        if (selection.length > 1 && selection.includes(note.id)) {
+          openContextMenu(e.clientX, e.clientY, bulkMenuItems(selection.length))
+          return
+        }
+        selectSingle(i)
         renderList()
         openContextMenu(e.clientX, e.clientY, noteMenuItems(note))
       }
@@ -1254,6 +1274,101 @@ async function openHighlighted() {
   renderList()
 }
 
+// --- Multi-select -----------------------------------------------------------
+// `highlighted` is the primary selection — the one driving the editor.
+// `multiSelected` holds the rest, and `anchorId` is the fixed end of a
+// Shift-range so extending it repeatedly grows from where it started rather
+// than from wherever the cursor last landed.
+
+const multiSelected = new Set<string>()
+let anchorId: string | null = null
+
+function fullSelection(): string[] {
+  const primary = results[highlighted]?.id
+  const all = new Set(multiSelected)
+  if (primary) all.add(primary)
+  return [...all]
+}
+
+function isSelected(note: NoteDto): boolean {
+  return note.id === results[highlighted]?.id || multiSelected.has(note.id)
+}
+
+function selectSingle(index: number) {
+  highlighted = index
+  multiSelected.clear()
+  anchorId = results[index]?.id ?? null
+}
+
+/// Selects everything between the anchor and `index`, inclusive, in the list's
+/// current order. The clicked note becomes the primary, so the editor follows
+/// the end you're dragging rather than the end you started from.
+function selectRange(index: number) {
+  const anchorIndex = results.findIndex((n) => n.id === anchorId)
+  if (anchorIndex < 0) {
+    selectSingle(index)
+    return
+  }
+  const [lo, hi] = anchorIndex < index ? [anchorIndex, index] : [index, anchorIndex]
+  multiSelected.clear()
+  for (let i = lo; i <= hi; i++) {
+    const id = results[i]?.id
+    if (id) multiSelected.add(id)
+  }
+  highlighted = index
+  multiSelected.delete(results[index]?.id ?? '')
+}
+
+/// Toggles one note's membership. Demoting the primary promotes another
+/// selected note to take its place, since the primary is what drives the
+/// editor and has to stay in step with "is anything selected at all".
+function toggleMultiSelect(index: number) {
+  const note = results[index]
+  if (!note) return
+  if (index === highlighted) {
+    const next = [...multiSelected][0]
+    if (next) {
+      multiSelected.delete(next)
+      highlighted = results.findIndex((n) => n.id === next)
+    }
+    return
+  }
+  if (multiSelected.has(note.id)) multiSelected.delete(note.id)
+  else multiSelected.add(note.id)
+}
+
+function extendSelection(delta: number) {
+  if (results.length === 0) return
+  if (!anchorId) anchorId = results[highlighted]?.id ?? null
+  selectRange(Math.max(0, Math.min(results.length - 1, highlighted + delta)))
+}
+
+async function deleteSelection() {
+  const ids = fullSelection()
+  if (ids.length === 0) return
+  cancelPendingSave()
+  if (ids.includes(openNoteId ?? '')) openNoteId = null
+  // One call, not a loop: the store treats a single delete as one undo step,
+  // so a bulk delete restores as one action.
+  await invoke('delete_notes', { ids })
+  multiSelected.clear()
+  anchorId = null
+  if (openNoteId === null) closeEditor()
+  await runSearch()
+}
+
+function bulkMenuItems(count: number): MenuItemSpec[] {
+  return [
+    {
+      label: `Reveal ${count} Notes in Explorer`,
+      run: async () => {
+        for (const id of fullSelection()) await invoke('reveal_note', { id })
+      },
+    },
+    { label: `Move ${count} Notes to Trash`, destructive: true, run: deleteSelection },
+  ]
+}
+
 // --- Context menu -----------------------------------------------------------
 // Built by hand rather than using the OS menu, because a webview has no access
 // to a native one. The trade is that it must reimplement the parts people
@@ -1353,8 +1468,8 @@ function noteMenuItems(note: NoteDto): MenuItemSpec[] {
       label: 'Move to Trash',
       destructive: true,
       run: async () => {
-        highlighted = results.findIndex((n) => n.id === note.id)
-        await deleteHighlighted()
+        selectSingle(results.findIndex((n) => n.id === note.id))
+        await deleteSelection()
       },
     },
   ]
@@ -1581,13 +1696,17 @@ function renderCurrentList() {
 }
 
 searchInput.addEventListener('keydown', (e) => {
-  if (e.key === 'ArrowDown') {
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault()
-    highlighted = Math.min(highlighted + 1, currentListLength() - 1)
-    renderCurrentList()
-  } else if (e.key === 'ArrowUp') {
-    e.preventDefault()
-    highlighted = Math.max(highlighted - 1, 0)
+    const delta = e.key === 'ArrowDown' ? 1 : -1
+    // Shift extends the selection; without it, arrowing collapses back to one.
+    if (e.shiftKey && templateFragment() === null && trashFragment() === null) {
+      extendSelection(delta)
+    } else {
+      const next = Math.max(0, Math.min(currentListLength() - 1, highlighted + delta))
+      if (templateFragment() === null && trashFragment() === null) selectSingle(next)
+      else highlighted = next
+    }
     renderCurrentList()
   } else if (e.key === 'Enter') {
     e.preventDefault()
@@ -1597,17 +1716,6 @@ searchInput.addEventListener('keydown', (e) => {
     void runSearch()
   }
 })
-
-async function deleteHighlighted() {
-  const target = results[highlighted]
-  if (!target) return
-  // Drop the pending save first — it would recreate the file we just trashed.
-  cancelPendingSave()
-  if (openNoteId === target.id) openNoteId = null
-  await invoke('delete_note', { id: target.id })
-  if (openNoteId === null) closeEditor()
-  await runSearch()
-}
 
 async function restoreDeleted() {
   const restored = await invoke<NoteDto[]>('restore_last_deleted')
@@ -1724,7 +1832,9 @@ window.addEventListener('keydown', (e) => {
   if (key === 'backspace') {
     e.preventDefault()
     if (e.shiftKey) void restoreDeleted()
-    else void deleteHighlighted()
+    // Deletes everything selected, which is just the one note in the common
+    // case — so there's no separate single-delete path to drift out of step.
+    else void deleteSelection()
     return
   }
   // Zoom the note text — Ctrl +/-/0, the Windows spelling of ⌘+/-/0. Both
@@ -2110,6 +2220,17 @@ async function boot() {
   dueTokenAt,
   toggleDueToken,
   changedRange,
+  selectSingle,
+  selectRange,
+  toggleMultiSelect,
+  extendSelection,
+  fullSelection,
+  setResultsForTest: (r: NoteDto[]) => {
+    results = r
+    multiSelected.clear()
+    anchorId = null
+    highlighted = 0
+  },
   previewInterlinks(data: InterlinksDto, expanded = true) {
     currentInterlinks = data
     interlinksExpanded = expanded
