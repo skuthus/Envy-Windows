@@ -314,9 +314,19 @@ const styles = {
 
 /// Envy hides markup only when the cursor is elsewhere — 1.3.0's "a link stays
 /// editable once your cursor is inside it". That single rule is what makes a
-/// no-preview-pane editor usable, and it's the behavior most worth proving in
-/// this spike: without it, styling actively fights the person typing.
+/// no-preview-pane editor usable: without it, styling fights the person typing.
+///
+/// An *unfocused* editor reveals nothing at all. A CodeMirror state always
+/// carries a selection, and a fresh one sits at position 0 — so without this
+/// check, any document beginning with a heading showed its `#` until something
+/// moved the cursor. Most visible inside an embed, which is unfocused by
+/// design until clicked, but the host editor had it too on every note that
+/// opened with a heading.
+///
+/// The Mac does the same thing by passing its selection only while the text
+/// view is first responder, and nil otherwise.
 function selectionTouches(view: EditorView, from: number, to: number): boolean {
+  if (!view.hasFocus) return false
   for (const r of view.state.selection.ranges) {
     if (r.from <= to && r.to >= from) return true
   }
@@ -711,7 +721,15 @@ const stylerPlugin = ViewPlugin.fromClass(
       const queryChanged = update.transactions.some((tr) =>
         tr.effects.some((e) => e.is(setSearchQuery)),
       )
-      if (update.docChanged || update.viewportChanged || update.selectionSet || queryChanged) {
+      // Focus is an input to the reveal rule now, so gaining or losing it has
+      // to redecorate — otherwise markers stay revealed after clicking away.
+      if (
+        update.docChanged ||
+        update.viewportChanged ||
+        update.selectionSet ||
+        update.focusChanged ||
+        queryChanged
+      ) {
         this.decorations = buildDecorations(update.view)
       }
     }
