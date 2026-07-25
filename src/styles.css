@@ -8,6 +8,10 @@
 html, body {
   margin: 0;
   height: 100%;
+  /* The shell itself never scrolls — only the list and the editor do. Without
+     this, any flex-sizing mistake inside silently turns into a scrolled window
+     with the search box pushed out of view rather than a visible glitch. */
+  overflow: hidden;
   background: var(--envy-background);
   color: var(--envy-text);
   font-family: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
@@ -63,15 +67,47 @@ html, body {
 #panes.vertical { flex-direction: column; }
 #panes.horizontal { flex-direction: row; }
 
-#list {
-  overflow-y: auto;
+#list-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
   background: var(--envy-file-list-background);
 }
-/* The list is the sized pane in both orientations; the editor takes the rest.
-   Sizing the same element either way keeps one persisted fraction meaningful
-   per orientation rather than needing to translate between them. */
-#panes.vertical > #list { height: 60%; flex: none; border-bottom: none; }
-#panes.horizontal > #list { width: 280px; flex: none; min-width: 220px; }
+#list { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* The list pane is the sized one in both orientations; the editor takes the
+   rest. Sizing the same element either way keeps one persisted fraction
+   meaningful per orientation rather than translating between them. */
+#panes.vertical > #list-pane { height: 60%; flex: none; }
+#panes.horizontal > #list-pane { width: 280px; flex: none; min-width: 220px; }
+
+#list-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 30%, transparent);
+}
+/* Name takes the slack so Due and Date sit at the right, over the columns
+   they sort. */
+#list-header .sort-button:first-child { flex: 1; text-align: left; }
+.sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--envy-blockquote);
+  cursor: default;
+}
+.sort-button.active { color: var(--envy-text); }
+.sort-button:hover { color: var(--envy-text); }
+.sort-arrow { font-size: 8px; }
 
 #divider {
   flex: none;
@@ -131,10 +167,17 @@ html, body {
 }
 .ai-badge { margin-left: 6px; color: var(--envy-blockquote); }
 
+/* `min-height: 0` and `min-width: 0` are both load-bearing, not defensive. A
+   flex item defaults to `min-*: auto`, meaning it refuses to shrink below its
+   content — so a long note made this pane taller than its share of the split,
+   which grew #panes past 100% and scrolled the entire shell, carrying the
+   search box and list off the top of the window. Only long notes triggered
+   it, which made it look like an intermittent rendering fault. */
 #editor-pane {
   position: relative;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
@@ -144,11 +187,30 @@ html, body {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 8px 28px;
+  padding: 6px 28px;
   font-size: 13px;
   font-weight: 600;
   background: var(--envy-title-bar-background);
   border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 30%, transparent);
+}
+/* The title bar is the rename field. It reads as a label until focused,
+   because a note's title is its filename and an always-boxed input would
+   invite renaming as a routine act rather than a deliberate one. */
+#note-title {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--envy-text);
+}
+#note-title:hover { border-color: color-mix(in srgb, var(--envy-marker) 50%, transparent); }
+#note-title:focus {
+  outline: none;
+  border-color: var(--envy-link);
+  background: color-mix(in srgb, var(--envy-marker) 12%, transparent);
 }
 
 /* Overlaid rather than swapped with the editor. CodeMirror measures itself on
@@ -173,7 +235,97 @@ html, body {
 }
 #empty-state.hidden { display: none; }
 
-#editor { flex: 1; min-height: 0; overflow: auto; }
+/* `hidden`, not `auto`: CodeMirror's own .cm-scroller already scrolls, so a
+   second scrolling container here produces two nested scrollbars. */
+#editor { flex: 1; min-height: 0; overflow: hidden; }
+
+/* --- Settings --------------------------------------------------------------- */
+
+#settings-button {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: transparent;
+  color: var(--envy-blockquote);
+  cursor: default;
+}
+#settings-button:hover {
+  color: var(--envy-text);
+  background: color-mix(in srgb, var(--envy-marker) 20%, transparent);
+}
+
+#settings {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 10;
+}
+#settings.hidden { display: none; }
+
+#settings-panel {
+  width: min(460px, 90vw);
+  max-height: 85vh;
+  overflow-y: auto;
+  padding: 18px 22px 22px;
+  border-radius: 12px;
+  background: var(--envy-title-bar-background);
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 45%, transparent);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+#settings-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+#settings-panel h2 { font-size: 15px; margin: 0; }
+#settings-panel h3 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--envy-blockquote);
+  margin: 18px 0 8px;
+}
+#settings-panel section { font-size: 13px; }
+#settings-panel label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+#settings-panel select {
+  margin-left: auto;
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: var(--envy-background);
+  color: var(--envy-text);
+}
+#settings-panel .setting-path {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--envy-blockquote);
+  word-break: break-all;
+}
+#settings-panel button {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: transparent;
+  color: var(--envy-text);
+  cursor: default;
+}
+#settings-panel button:hover { background: color-mix(in srgb, var(--envy-marker) 20%, transparent); }
+#settings-close { border: none; font-size: 14px; color: var(--envy-blockquote); }
 
 .cm-editor { background: var(--envy-background); height: 100%; }
 .cm-editor.cm-focused { outline: none; }

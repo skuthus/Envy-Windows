@@ -191,6 +191,26 @@ fn can_restore(state: State<AppState>) -> bool {
     state.store.lock().unwrap().can_restore_last_deleted()
 }
 
+#[tauri::command]
+fn set_include_subfolders(include: bool, state: State<AppState>) -> usize {
+    let mut store = state.store.lock().unwrap();
+    store.set_include_subfolders(include);
+    store.notes().len()
+}
+
+/// Opens The Index in Explorer. The folder being an ordinary folder of
+/// ordinary files is the whole premise, so making it one click away matters
+/// more than it would in an app that owned its storage.
+#[tauri::command]
+fn reveal_index(state: State<AppState>) -> Result<(), String> {
+    let dir = state.store.lock().unwrap().directory().to_path_buf();
+    std::process::Command::new("explorer")
+        .arg(dir)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 /// Re-reads the Index from disk. Called on window focus for now — the file
 /// watcher will make this automatic, but until then focusing the window after
 /// editing a note elsewhere is enough to pick the change up.
@@ -258,6 +278,8 @@ pub fn run() {
             delete_note,
             restore_last_deleted,
             can_restore,
+            set_include_subfolders,
+            reveal_index,
             reload,
         ])
         .run(tauri::generate_context!())

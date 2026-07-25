@@ -19,9 +19,15 @@
           spellcheck="false"
         />
         <span id="count"></span>
+        <button id="settings-button" type="button" title="Settings (Ctrl+,)">
+          Settings
+        </button>
       </div>
       <div id="panes">
-        <div id="list" role="listbox" aria-label="Notes"></div>
+        <div id="list-pane">
+          <div id="list-header" role="row"></div>
+          <div id="list" role="listbox" aria-label="Notes"></div>
+        </div>
         <div
           id="divider"
           role="separator"
@@ -30,7 +36,14 @@
         ></div>
         <div id="editor-pane">
           <div id="note-title-bar">
-            <span id="note-title"></span>
+            <input
+              id="note-title"
+              type="text"
+              spellcheck="false"
+              autocomplete="off"
+              aria-label="Note title"
+              title="Click to rename. Links to this note are updated."
+            />
             <span id="note-due"></span>
           </div>
           <div id="editor"></div>
@@ -38,6 +51,60 @@
             Type to search. Press Return to open the top match, or create a note
             from what you typed.
           </div>
+        </div>
+      </div>
+
+      <div id="settings" class="hidden" role="dialog" aria-label="Settings">
+        <div id="settings-panel">
+          <header>
+            <h2>Settings</h2>
+            <button id="settings-close" type="button" aria-label="Close">✕</button>
+          </header>
+
+          <section>
+            <h3>The Index</h3>
+            <p class="setting-path" id="settings-index-path"></p>
+            <button id="settings-open-folder" type="button">Show in Explorer</button>
+            <label>
+              <input type="checkbox" id="setting-subfolders" />
+              Include subfolders
+            </label>
+          </section>
+
+          <section>
+            <h3>Note list</h3>
+            <label>
+              <input type="checkbox" id="setting-preview" />
+              Show note preview
+            </label>
+            <label>
+              <input type="checkbox" id="setting-date" />
+              Show date modified
+            </label>
+            <label>
+              <input type="checkbox" id="setting-due" />
+              Show due column
+            </label>
+          </section>
+
+          <section>
+            <h3>Appearance</h3>
+            <label>
+              Layout
+              <select id="setting-layout">
+                <option value="vertical">Vertical (list above note)</option>
+                <option value="horizontal">Horizontal (list beside note)</option>
+              </select>
+            </label>
+            <label>
+              Theme
+              <select id="setting-theme">
+                <option value="system">Follow system</option>
+                <option value="dark">Dark</option>
+                <option value="light">Light</option>
+              </select>
+            </label>
+          </section>
         </div>
       </div>
     </div>

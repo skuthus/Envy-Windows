@@ -24,8 +24,9 @@ const searchInput = document.getElementById('search') as HTMLInputElement
 const panesEl = document.getElementById('panes')!
 const dividerEl = document.getElementById('divider')!
 const listEl = document.getElementById('list')!
+const listHeaderEl = document.getElementById('list-header')!
 const countEl = document.getElementById('count')!
-const titleEl = document.getElementById('note-title')!
+const titleEl = document.getElementById('note-title') as HTMLInputElement
 const dueEl = document.getElementById('note-due')!
 const editorEl = document.getElementById('editor')!
 const emptyEl = document.getElementById('empty-state')!
@@ -233,9 +234,111 @@ function dueUrgencyClass(iso: string): string {
   return due <= weekEnd ? 'soon' : 'later'
 }
 
-/// Matches the Mac's `showNotePreview` default. Opt-in rather than always-on:
-/// the compact one-line row is what the list is designed around.
-const showNotePreview = localStorage.getItem('showNotePreview') === 'true'
+// --- Settings ---------------------------------------------------------------
+// Defaults match the Mac's @AppStorage defaults exactly. `showNotePreview` is
+// off because the compact one-line row is what the list is designed around.
+
+function boolSetting(key: string, fallback: boolean): boolean {
+  const raw = localStorage.getItem(key)
+  return raw === null ? fallback : raw === 'true'
+}
+
+const settings = {
+  showNotePreview: boolSetting('showNotePreview', false),
+  showDateModified: boolSetting('showDateModified', true),
+  showDueSort: boolSetting('showDueSort', true),
+  includeSubfolders: boolSetting('indexIncludeSubfolders', false),
+  theme: localStorage.getItem('appearanceMode') ?? 'system',
+}
+
+function saveSetting(key: string, value: string | boolean) {
+  localStorage.setItem(key, String(value))
+}
+
+// --- Sorting ----------------------------------------------------------------
+
+type SortField = 'name' | 'date' | 'due'
+
+/// The direction each field starts in when first selected — Notational
+/// Velocity's convention (names A→Z, dates newest first). Due defaults
+/// ascending so the most urgent note is at the top, the same reasoning as
+/// names starting A→Z rather than Z→A.
+const DEFAULT_ASCENDING: Record<SortField, boolean> = {
+  name: true,
+  date: false,
+  due: true,
+}
+
+let sortField: SortField = (localStorage.getItem('noteSortField') as SortField | null) ?? 'date'
+let sortAscending = boolSetting('noteSortAscending', false)
+
+/// Applied after filtering, replacing relevance order entirely — same as the
+/// Mac, where sortNotes runs on the already-filtered list.
+function sortNotes(notes: NoteDto[]): NoteDto[] {
+  const dir = sortAscending ? 1 : -1
+  const sorted = [...notes]
+  switch (sortField) {
+    case 'name':
+      // `numeric` approximates localizedStandardCompare, so "Note 2" sorts
+      // before "Note 10" rather than after it.
+      sorted.sort(
+        (a, b) => dir * a.title.localeCompare(b.title, undefined, { numeric: true, sensitivity: 'base' }),
+      )
+      break
+    case 'date':
+      sorted.sort((a, b) => dir * (a.modifiedMs - b.modifiedMs))
+      break
+    case 'due':
+      // An undated note always sorts to the end, whichever direction is
+      // chosen — "no due date" isn't smaller or larger than a date, it's
+      // absent, and having undated notes bury dated ones (or the reverse)
+      // depending on which arrow is clicked would be surprising either way.
+      sorted.sort((a, b) => {
+        if (!a.due && !b.due) return 0
+        if (!a.due) return 1
+        if (!b.due) return -1
+        return dir * a.due.localeCompare(b.due)
+      })
+      break
+  }
+  return sorted
+}
+
+function renderSortHeader() {
+  const fields: Array<[SortField, string]> = [
+    ['name', 'Name'],
+    ...(settings.showDueSort ? ([['due', 'Due']] as Array<[SortField, string]>) : []),
+    ...(settings.showDateModified ? ([['date', 'Date']] as Array<[SortField, string]>) : []),
+  ]
+  listHeaderEl.replaceChildren(
+    ...fields.map(([field, label]) => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'sort-button' + (sortField === field ? ' active' : '')
+      b.dataset.field = field
+      b.textContent = label
+      if (sortField === field) {
+        const arrow = document.createElement('span')
+        arrow.className = 'sort-arrow'
+        arrow.textContent = sortAscending ? '▲' : '▼'
+        b.append(arrow)
+      }
+      b.onclick = () => {
+        if (sortField === field) {
+          sortAscending = !sortAscending
+        } else {
+          sortField = field
+          sortAscending = DEFAULT_ASCENDING[field]
+        }
+        saveSetting('noteSortField', sortField)
+        saveSetting('noteSortAscending', sortAscending)
+        renderSortHeader()
+        renderList()
+      }
+      return b
+    }),
+  )
+}
 
 /// The "smart" date style: a time for today, a weekday within the last week,
 /// month/day within this year, and a full date beyond that.
@@ -272,6 +375,7 @@ function formatDue(iso: string): string {
 
 function renderList() {
   countEl.textContent = results.length ? String(results.length) : ''
+  results = sortNotes(results)
   listEl.replaceChildren(
     ...results.map((note, i) => {
       const row = document.createElement('div')
@@ -316,12 +420,14 @@ function renderList() {
       // showDateModified defaults to true on the Mac; showNotePreview defaults
       // to false. So the default row is one dense line — title, due, date —
       // not a two-line card. Preview is opt-in.
-      const date = document.createElement('span')
-      date.className = 'row-date'
-      date.textContent = formatModified(note.modifiedMs)
-      row.append(date)
+      if (settings.showDateModified) {
+        const date = document.createElement('span')
+        date.className = 'row-date'
+        date.textContent = formatModified(note.modifiedMs)
+        row.append(date)
+      }
 
-      if (showNotePreview) {
+      if (settings.showNotePreview) {
         const meta = document.createElement('div')
         meta.className = 'row-meta'
         meta.textContent = note.preview
@@ -351,7 +457,7 @@ async function openNote(id: string) {
   const note = await invoke<NoteDto | null>('read_note', { id })
   if (!note) return
   openNoteId = note.id
-  titleEl.textContent = note.title
+  titleEl.value = note.title
   dueEl.textContent = note.due ? formatDue(note.due) : ''
   dueEl.className = note.due ? `envy-due-${dueUrgencyClass(note.due)}` : ''
   emptyEl.classList.add('hidden')
@@ -434,9 +540,51 @@ async function restoreDeleted() {
   }
 }
 
+// --- Renaming ---------------------------------------------------------------
+// The title bar *is* the rename field — a note's title is its filename, so
+// there's nothing else it could edit. Committing runs the store's rename,
+// which rewrites every [[link]] and ![[embed]] pointing at the old title
+// across the Index.
+
+async function commitRename() {
+  if (!openNoteId) return
+  const next = titleEl.value.trim()
+  const current = results.find((n) => n.id === openNoteId)?.title ?? ''
+  if (!next || next === current) {
+    titleEl.value = current
+    return
+  }
+  try {
+    const renamed = await invoke<NoteDto>('rename_note', { id: openNoteId, title: next })
+    openNoteId = renamed.id
+    // The sanitizer may have changed what was typed — a title Windows can't
+    // represent as a filename comes back altered, and showing the typed text
+    // would be a lie about what's on disk.
+    titleEl.value = renamed.title
+    await runSearch()
+    highlighted = Math.max(0, results.findIndex((n) => n.id === renamed.id))
+    renderList()
+  } catch (e) {
+    console.error('rename failed', e)
+    titleEl.value = current
+  }
+}
+
+titleEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    void commitRename().then(() => view.focus())
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    titleEl.value = results.find((n) => n.id === openNoteId)?.title ?? ''
+    view.focus()
+  }
+})
+titleEl.addEventListener('blur', () => void commitRename())
+
 function closeEditor() {
   openNoteId = null
-  titleEl.textContent = ''
+  titleEl.value = ''
   dueEl.textContent = ''
   emptyEl.classList.remove('hidden')
   view.dispatch({
@@ -448,6 +596,14 @@ function closeEditor() {
 window.addEventListener('keydown', (e) => {
   if (!e.ctrlKey) return
   const key = e.key.toLowerCase()
+
+  // Ctrl+, opens Settings — the Windows spelling of ⌘,.
+  if (key === ',') {
+    e.preventDefault()
+    if (settingsEl.classList.contains('hidden')) openSettings()
+    else closeSettings()
+    return
+  }
 
   // Delete is Ctrl+Backspace and restore is Ctrl+Shift+Backspace, matching the
   // Mac's ⌘⌫ / ⌘⇧⌫. Deliberately not the bare Del key, which Windows
@@ -495,21 +651,90 @@ void listen('index-changed', async () => {
   }
 })
 
-// Envious ships a light and a dark face and follows the OS, rather than
-// freezing on whichever was picked — `AppearanceMode.system` on the Mac.
+// Envious ships a light and a dark face. Following the OS is the default —
+// `AppearanceMode.system` on the Mac — but an explicit choice pins it.
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
 function syncTheme() {
   // Every color is a CSS variable, so swapping the token set is the whole
   // switch — no light-mode stylesheet to keep in step.
-  applyTheme(darkQuery.matches ? enviousDark : enviousLight)
+  const dark = settings.theme === 'system' ? darkQuery.matches : settings.theme === 'dark'
+  applyTheme(dark ? enviousDark : enviousLight)
 }
 darkQuery.addEventListener('change', syncTheme)
+
+// --- Settings panel ---------------------------------------------------------
+
+const settingsEl = document.getElementById('settings')!
+const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T
+
+function openSettings() {
+  el<HTMLInputElement>('setting-preview').checked = settings.showNotePreview
+  el<HTMLInputElement>('setting-date').checked = settings.showDateModified
+  el<HTMLInputElement>('setting-due').checked = settings.showDueSort
+  el<HTMLInputElement>('setting-subfolders').checked = settings.includeSubfolders
+  el<HTMLSelectElement>('setting-layout').value = layoutMode
+  el<HTMLSelectElement>('setting-theme').value = settings.theme
+  settingsEl.classList.remove('hidden')
+}
+
+function closeSettings() {
+  settingsEl.classList.add('hidden')
+}
+
+el('settings-button').onclick = openSettings
+el('settings-close').onclick = closeSettings
+settingsEl.onclick = (e) => {
+  if (e.target === settingsEl) closeSettings() // click the backdrop to dismiss
+}
+
+el<HTMLInputElement>('setting-preview').onchange = (e) => {
+  settings.showNotePreview = (e.target as HTMLInputElement).checked
+  saveSetting('showNotePreview', settings.showNotePreview)
+  renderList()
+}
+el<HTMLInputElement>('setting-date').onchange = (e) => {
+  settings.showDateModified = (e.target as HTMLInputElement).checked
+  saveSetting('showDateModified', settings.showDateModified)
+  renderSortHeader()
+  renderList()
+}
+el<HTMLInputElement>('setting-due').onchange = (e) => {
+  settings.showDueSort = (e.target as HTMLInputElement).checked
+  saveSetting('showDueSort', settings.showDueSort)
+  renderSortHeader()
+  renderList()
+}
+el<HTMLInputElement>('setting-subfolders').onchange = async (e) => {
+  settings.includeSubfolders = (e.target as HTMLInputElement).checked
+  saveSetting('indexIncludeSubfolders', settings.includeSubfolders)
+  await invoke('set_include_subfolders', { include: settings.includeSubfolders })
+  await runSearch()
+}
+el<HTMLSelectElement>('setting-layout').onchange = (e) => {
+  layoutMode = (e.target as HTMLSelectElement).value as LayoutMode
+  applyLayout()
+}
+el<HTMLSelectElement>('setting-theme').onchange = (e) => {
+  settings.theme = (e.target as HTMLSelectElement).value
+  saveSetting('appearanceMode', settings.theme)
+  syncTheme()
+}
+el('settings-open-folder').onclick = () => void invoke('reveal_index')
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !settingsEl.classList.contains('hidden')) closeSettings()
+})
 
 async function boot() {
   syncTheme()
   applyLayout()
+  renderSortHeader()
   const dir = await invoke<string>('index_directory')
   searchInput.placeholder = `Search ${dir}…`
+  el('settings-index-path').textContent = dir
+  if (settings.includeSubfolders) {
+    await invoke('set_include_subfolders', { include: true })
+  }
   await runSearch()
   searchInput.focus()
 }
