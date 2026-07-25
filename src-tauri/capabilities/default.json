@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window",
-  "windows": ["main"],
+  "description": "Capability for the main window and the pinned-note popover. The popover needs its own entry: capabilities are per-window, so without being named here it cannot even hide itself, and calls like getCurrentWindow().hide() are denied at runtime rather than failing to compile.",
+  "windows": ["main", "pinned"],
   "permissions": [
     "core:default",
     "opener:default"

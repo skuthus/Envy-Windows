@@ -99,24 +99,48 @@ darkQuery.addEventListener('change', syncTheme)
 
 // Flush before the window goes away — hiding is the normal way this closes,
 // and a pending debounce would otherwise be dropped along with it.
-async function hide() {
+async function flush() {
   window.clearTimeout(saveTimer)
   await save()
-  await getCurrentWindow().hide()
+}
+
+/// Hiding is deliberately allowed to fail without taking the caller with it.
+///
+/// It failed silently once already: capabilities are per-window, this window
+/// wasn't listed in one, and `hide()` was rejected at runtime. Because both
+/// buttons awaited the hide *before* doing their work, the rejection killed
+/// the action and neither button appeared to do anything at all. The work now
+/// happens first, and a hide that fails is logged rather than swallowed.
+async function hide() {
+  try {
+    await getCurrentWindow().hide()
+  } catch (e) {
+    console.error('could not hide the pinned window', e)
+  }
 }
 
 document.getElementById('pinned-unpin')!.onclick = async () => {
+  await flush()
+  try {
+    await invoke('set_pinned_note', { id: null })
+  } catch (e) {
+    console.error('unpin failed', e)
+  }
   await hide()
-  await invoke('set_pinned_note', { id: null })
 }
 
 document.getElementById('pinned-open')!.onclick = async () => {
+  await flush()
+  try {
+    if (noteId) await invoke('open_in_main_window', { id: noteId })
+  } catch (e) {
+    console.error('open failed', e)
+  }
   await hide()
-  if (noteId) await invoke('open_in_main_window', { id: noteId })
 }
 
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') void hide()
+  if (e.key === 'Escape') void flush().then(hide)
 })
 
 // Re-read on every show: the note may have changed in the app, or been
