@@ -1106,14 +1106,24 @@ interface MenuItemSpec {
   destructive?: boolean
 }
 
+/// A rule between groups. Its own type rather than a magic label, so a note
+/// that happens to be called "---" can't draw one.
+const MENU_SEPARATOR = Symbol('separator')
+type MenuEntry = MenuItemSpec | typeof MENU_SEPARATOR
+
 function closeContextMenu() {
   contextMenuEl.classList.add('hidden')
   contextMenuEl.replaceChildren()
 }
 
-function openContextMenu(x: number, y: number, items: MenuItemSpec[]) {
+function openContextMenu(x: number, y: number, items: MenuEntry[]) {
   contextMenuEl.replaceChildren(
     ...items.map((item) => {
+      if (item === MENU_SEPARATOR) {
+        const hr = document.createElement('div')
+        hr.className = 'context-separator'
+        return hr
+      }
       const b = document.createElement('button')
       b.type = 'button'
       b.className = 'context-item' + (item.destructive ? ' destructive' : '')
@@ -1194,6 +1204,34 @@ function noteMenuItems(note: NoteDto): MenuItemSpec[] {
     },
   ]
 }
+
+/// Right-clicking the note's title bar.
+///
+/// Scoped to the note you're in rather than being a Settings shortcut with
+/// extra steps — the same actions the list offers, where you're actually
+/// working, plus the app-level items that would otherwise have nowhere to
+/// live now that the Settings button is gone.
+///
+/// Settings still has two other homes (Ctrl+, and the tray menu), so this is a
+/// third way in rather than the only one — which is what makes it acceptable
+/// for it to be a right-click, a gesture nobody discovers by looking.
+function titleBarMenuItems(): MenuEntry[] {
+  const open = results.find((n) => n.id === openNoteId)
+  const items: MenuEntry[] = []
+  if (open) {
+    items.push(...noteMenuItems(open), MENU_SEPARATOR)
+  }
+  items.push({ label: 'Settings…', run: openSettings })
+  return items
+}
+
+document.getElementById('note-title-bar')!.addEventListener('contextmenu', (e) => {
+  // Not when right-clicking inside the title field itself — that should keep
+  // whatever text menu the platform gives an input.
+  if ((e.target as HTMLElement).id === 'note-title') return
+  e.preventDefault()
+  openContextMenu(e.clientX, e.clientY, titleBarMenuItems())
+})
 
 // --- Pinning ----------------------------------------------------------------
 // A pinned note stays at the top of the list regardless of sort. Membership is
@@ -1694,7 +1732,6 @@ function closeSettings() {
   settingsEl.classList.add('hidden')
 }
 
-el('settings-button').onclick = openSettings
 el('settings-close').onclick = closeSettings
 settingsEl.onclick = (e) => {
   if (e.target === settingsEl) closeSettings() // click the backdrop to dismiss

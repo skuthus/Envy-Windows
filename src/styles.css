@@ -536,6 +536,11 @@ body.popover {
 .context-item:hover { background: var(--envy-selection); }
 /* The destructive entry is coloured, not separated by a divider — one
    irreversible item in a list of six reads better marked than fenced off. */
+.context-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: color-mix(in srgb, var(--envy-marker) 45%, transparent);
+}
 .context-item.destructive { color: var(--envy-due-overdue); }
 .context-item.destructive:hover {
   background: color-mix(in srgb, var(--envy-due-overdue) 22%, transparent);
@@ -543,21 +548,6 @@ body.popover {
 }
 
 /* --- Settings --------------------------------------------------------------- */
-
-#settings-button {
-  font: inherit;
-  font-size: 12px;
-  padding: 5px 10px;
-  border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
-  background: transparent;
-  color: var(--envy-blockquote);
-  cursor: default;
-}
-#settings-button:hover {
-  color: var(--envy-text);
-  background: color-mix(in srgb, var(--envy-marker) 20%, transparent);
-}
 
 #settings {
   position: fixed;
