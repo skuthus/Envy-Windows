@@ -37,7 +37,6 @@ const dividerEl = document.getElementById('divider')!
 const listPaneEl = document.getElementById('list-pane')!
 const listEl = document.getElementById('list')!
 const listHeaderEl = document.getElementById('list-header')!
-const countEl = document.getElementById('count')!
 const titleEl = document.getElementById('note-title') as HTMLInputElement
 const dueEl = document.getElementById('note-due')!
 const tagsEl = document.getElementById('note-tags')!
@@ -686,7 +685,6 @@ function formatDue(iso: string): string {
 }
 
 function renderList() {
-  countEl.textContent = results.length ? String(results.length) : ''
   results = applyPinning(sortNotes(results))
   listEl.replaceChildren(
     ...results.map((note, i) => {
@@ -872,7 +870,6 @@ function showTrashPreview(note: NoteDto | null) {
 }
 
 function renderTrashList() {
-  countEl.textContent = trashResults.length ? String(trashResults.length) : ''
   listEl.replaceChildren(
     ...trashResults.map((note, i) => {
       const row = document.createElement('div')
@@ -953,7 +950,6 @@ let templateResults: TemplateDto[] = []
 let openTemplatePath: string | null = null
 
 function renderTemplateList() {
-  countEl.textContent = templateResults.length ? String(templateResults.length) : ''
   listEl.replaceChildren(
     ...templateResults.map((t, i) => {
       const row = document.createElement('div')
