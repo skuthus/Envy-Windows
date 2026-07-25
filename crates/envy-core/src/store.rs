@@ -340,6 +340,26 @@ impl NoteStore {
         out
     }
 
+    /// Turns a note into a template — a plain move into `Templates/`, which
+    /// drops it out of `notes` since the scan never treats that folder as
+    /// notes. The text is untouched: a template is just a note that lives
+    /// somewhere else.
+    pub fn convert_to_template(&mut self, note: &Note) -> Option<NoteTemplate> {
+        let dir = self.directory.join(TEMPLATES_FOLDER_NAME);
+        fs::create_dir_all(&dir).ok()?;
+        let path = dir.join(unique_filename(note.title(), &dir));
+        fs::rename(note.url(), &path).ok()?;
+        self.notes.retain(|n| n.id() != note.id());
+        Some(NoteTemplate {
+            id: path.to_string_lossy().into_owned(),
+            name: path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+            path,
+        })
+    }
+
     /// Files a fleeting note into the Index proper — a plain move out of
     /// `Inbox/`. The note's text is untouched, so nothing about having been
     /// fleeting survives in the file.
@@ -736,6 +756,30 @@ mod tests {
         // Not "Test 2" — the collision is with the file itself.
         assert_eq!(renamed.title(), "Test");
         assert!(dir.path().join("Test.md").exists());
+    }
+
+    #[test]
+    fn converting_a_note_to_a_template_moves_it_out_of_the_index() {
+        let (dir, mut store) = store_with(&[("Meeting.md", "## Agenda\n\n-"), ("Other.md", "x")]);
+        let note = store
+            .notes()
+            .iter()
+            .find(|n| n.title() == "Meeting")
+            .unwrap()
+            .clone();
+
+        let template = store.convert_to_template(&note).unwrap();
+        assert_eq!(template.name, "Meeting");
+        assert!(dir.path().join("Templates/Meeting.md").exists());
+        assert!(!dir.path().join("Meeting.md").exists());
+        // Gone from the note list, present as a template.
+        assert_eq!(titles(&store), vec!["Other"]);
+        assert_eq!(store.templates().len(), 1);
+        // The text is untouched — a template is just a note living elsewhere.
+        assert_eq!(
+            fs::read_to_string(dir.path().join("Templates/Meeting.md")).unwrap(),
+            "## Agenda\n\n-"
+        );
     }
 
     // --- Trash --------------------------------------------------------------

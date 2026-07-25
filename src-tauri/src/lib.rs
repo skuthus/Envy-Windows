@@ -339,6 +339,45 @@ fn reveal_index(state: State<AppState>) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Opens Explorer with one note selected — the Mac's "Open in Finder".
+///
+/// `explorer /select,<path>` returns a non-zero exit code even when it works,
+/// which is long-standing Windows behaviour rather than a failure, so the
+/// status is deliberately not checked.
+#[tauri::command]
+fn reveal_note(id: String, state: State<AppState>) -> Result<(), String> {
+    let path = {
+        let store = state.store.lock().unwrap();
+        store
+            .notes()
+            .iter()
+            .find(|n| n.id() == id)
+            .map(|n| n.url().to_path_buf())
+            .ok_or_else(|| format!("no note with id {id}"))?
+    };
+    std::process::Command::new("explorer")
+        .arg(format!("/select,{}", path.display()))
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn convert_to_template(id: String, state: State<AppState>) -> Result<TemplateDto, String> {
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    let Some(note) = store.notes().iter().find(|n| n.id() == id).cloned() else {
+        return Err(format!("no note with id {id}"));
+    };
+    store
+        .convert_to_template(&note)
+        .map(|t| TemplateDto {
+            id: t.path.to_string_lossy().into_owned(),
+            name: t.name,
+        })
+        .ok_or_else(|| "could not move the note into Templates".to_string())
+}
+
 /// Re-reads the Index from disk. Called on window focus for now — the file
 /// watcher will make this automatic, but until then focusing the window after
 /// editing a note elsewhere is enough to pick the change up.
@@ -641,6 +680,8 @@ pub fn run() {
             create_inbox_note,
             set_include_subfolders,
             reveal_index,
+            reveal_note,
+            convert_to_template,
             autostart_enabled,
             set_autostart,
             pinned_note_id,

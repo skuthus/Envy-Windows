@@ -416,6 +416,43 @@ body.popover {
 .interlink-row.suggested { color: var(--envy-blockquote); font-style: italic; }
 .interlink-row.suggested:hover { color: var(--envy-link); font-style: normal; }
 
+/* --- Context menu ----------------------------------------------------------- */
+
+#context-menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 200px;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--envy-title-bar-background);
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+#context-menu.hidden { display: none; }
+
+.context-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 10px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--envy-text);
+  cursor: default;
+  white-space: nowrap;
+}
+.context-item:hover { background: var(--envy-selection); }
+/* The destructive entry is coloured, not separated by a divider — one
+   irreversible item in a list of six reads better marked than fenced off. */
+.context-item.destructive { color: var(--envy-due-overdue); }
+.context-item.destructive:hover {
+  background: color-mix(in srgb, var(--envy-due-overdue) 22%, transparent);
+  color: var(--envy-due-overdue);
+}
+
 /* --- Settings --------------------------------------------------------------- */
 
 #settings-button {

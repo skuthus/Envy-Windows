@@ -685,6 +685,14 @@ function renderList() {
         highlighted = i
         void openHighlighted()
       }
+      row.oncontextmenu = (e) => {
+        e.preventDefault()
+        // Right-clicking also moves the highlight, so the menu and the list
+        // never disagree about which note is being acted on.
+        highlighted = i
+        renderList()
+        openContextMenu(e.clientX, e.clientY, noteMenuItems(note))
+      }
       return row
     }),
   )
@@ -804,6 +812,109 @@ async function openHighlighted() {
   if (!target) return
   await openNote(target.id)
   renderList()
+}
+
+// --- Context menu -----------------------------------------------------------
+// Built by hand rather than using the OS menu, because a webview has no access
+// to a native one. The trade is that it must reimplement the parts people
+// expect for free: dismissal on click-away, Escape, scroll, and window blur,
+// plus flipping when it would open past the window edge.
+
+const contextMenuEl = document.getElementById('context-menu')!
+
+interface MenuItemSpec {
+  label: string
+  run: () => void | Promise<void>
+  destructive?: boolean
+}
+
+function closeContextMenu() {
+  contextMenuEl.classList.add('hidden')
+  contextMenuEl.replaceChildren()
+}
+
+function openContextMenu(x: number, y: number, items: MenuItemSpec[]) {
+  contextMenuEl.replaceChildren(
+    ...items.map((item) => {
+      const b = document.createElement('button')
+      b.type = 'button'
+      b.className = 'context-item' + (item.destructive ? ' destructive' : '')
+      b.textContent = item.label
+      b.onclick = () => {
+        closeContextMenu()
+        void item.run()
+      }
+      return b
+    }),
+  )
+  // Placed offscreen-but-measurable first: the size isn't known until the
+  // items are in the DOM, and it's needed to decide whether to flip.
+  contextMenuEl.classList.remove('hidden')
+  contextMenuEl.style.left = '0px'
+  contextMenuEl.style.top = '0px'
+  const { width, height } = contextMenuEl.getBoundingClientRect()
+  const left = x + width > window.innerWidth ? Math.max(0, x - width) : x
+  const top = y + height > window.innerHeight ? Math.max(0, y - height) : y
+  contextMenuEl.style.left = `${left}px`
+  contextMenuEl.style.top = `${top}px`
+}
+
+// `capture` so a click that lands on something interactive closes the menu
+// before that thing handles it, rather than after.
+window.addEventListener('mousedown', (e) => {
+  if (!contextMenuEl.contains(e.target as Node)) closeContextMenu()
+}, true)
+window.addEventListener('blur', closeContextMenu)
+window.addEventListener('scroll', closeContextMenu, true)
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeContextMenu()
+})
+// Suppress the webview's own menu everywhere — this is an app, not a page.
+window.addEventListener('contextmenu', (e) => e.preventDefault())
+
+function noteMenuItems(note: NoteDto): MenuItemSpec[] {
+  return [
+    {
+      label: pinnedIds.has(note.id) ? 'Unpin Note' : 'Pin Note',
+      run: () => {
+        highlighted = results.findIndex((n) => n.id === note.id)
+        togglePin()
+      },
+    },
+    {
+      label: note.id === trayPinnedId ? 'Unpin from Tray' : 'Pin to Tray',
+      run: async () => {
+        highlighted = results.findIndex((n) => n.id === note.id)
+        await toggleTrayPin()
+      },
+    },
+    {
+      label: 'Rename',
+      run: async () => {
+        await openNote(note.id)
+        renderList()
+        titleEl.focus()
+        titleEl.select()
+      },
+    },
+    { label: 'Show in Explorer', run: () => invoke('reveal_note', { id: note.id }) },
+    {
+      label: 'Make This Note a Template',
+      run: async () => {
+        await invoke('convert_to_template', { id: note.id })
+        if (openNoteId === note.id) closeEditor()
+        await runSearch()
+      },
+    },
+    {
+      label: 'Move to Trash',
+      destructive: true,
+      run: async () => {
+        highlighted = results.findIndex((n) => n.id === note.id)
+        await deleteHighlighted()
+      },
+    },
+  ]
 }
 
 // --- Pinning ----------------------------------------------------------------
@@ -1321,6 +1432,10 @@ async function boot() {
   wikiLinkTargetAt,
   // Lets the interlinks panel be exercised without a backend, so its layout
   // can be checked in a plain browser rather than by driving the real app.
+  // Positioning and dismissal are layout behaviour, checkable in a plain
+  // browser without a backend behind them.
+  openContextMenu,
+  noteMenuItems,
   previewInterlinks(data: InterlinksDto, expanded = true) {
     currentInterlinks = data
     interlinksExpanded = expanded
