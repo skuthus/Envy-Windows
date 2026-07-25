@@ -73,7 +73,12 @@ const view = new EditorView({
       }),
       editable.of(EditorView.editable.of(false)),
       EditorView.updateListener.of((u) => {
-        if (u.docChanged && openNoteId) scheduleSave()
+        if (u.docChanged && openNoteId) {
+          scheduleSave()
+          // Counts track the buffer, not the saved file — they should move as
+          // you type, not lag 400ms behind on the save debounce.
+          renderStats()
+        }
       }),
       // Alt+Up from the editor goes back to the search box — the keyboard path
       // between panes the Mac app has on ⌥↑.
@@ -91,6 +96,172 @@ const view = new EditorView({
   }),
   parent: editorEl,
 })
+
+// --- Footer: interlinks and counts ------------------------------------------
+
+interface InterlinkRef {
+  id: string
+  title: string
+}
+interface SuggestionDto {
+  title: string
+  /// UTF-16 offsets, so they're usable as JS string indices directly.
+  start: number
+  end: number
+}
+interface InterlinksDto {
+  links: InterlinkRef[]
+  backlinks: InterlinkRef[]
+  suggested: SuggestionDto[]
+}
+
+const interlinksEl = document.getElementById('interlinks')!
+const interlinksToggleEl = document.getElementById('interlinks-toggle') as HTMLButtonElement
+const statsEl = document.getElementById('stats')!
+
+let interlinksExpanded = localStorage.getItem('backlinksExpanded') === 'true'
+let currentInterlinks: InterlinksDto = { links: [], backlinks: [], suggested: [] }
+
+/// Grapheme clusters, matching Swift's `String.count` — an emoji or an
+/// accented character built from combining marks is one character to a reader
+/// and should be one here. `Intl.Segmenter` is the only correct way to do that
+/// in JS; `.length` counts UTF-16 units and would report 2 for a single emoji.
+const graphemes =
+  typeof Intl !== 'undefined' && 'Segmenter' in Intl
+    ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+    : null
+
+function countCharacters(text: string): number {
+  // Segmenting a very long note on every keystroke is wasted work for a
+  // readout nobody reads to the character at that size, so fall back to code
+  // points past the point where the difference stops mattering.
+  if (!graphemes || text.length > 20000) return [...text].length
+  let n = 0
+  for (const _ of graphemes.segment(text)) n++
+  return n
+}
+
+function countWords(text: string): number {
+  // Matches Swift's `split { $0.isWhitespace || $0.isNewline }`, which drops
+  // empty subsequences — so runs of whitespace collapse rather than counting.
+  const trimmed = text.trim()
+  return trimmed === '' ? 0 : trimmed.split(/\s+/u).length
+}
+
+function renderStats() {
+  if (!openNoteId) {
+    statsEl.textContent = ''
+    return
+  }
+  const text = view.state.doc.toString()
+  const words = countWords(text)
+  const chars = countCharacters(text)
+  statsEl.textContent = `${words.toLocaleString()} word${words === 1 ? '' : 's'}, ${chars.toLocaleString()} character${chars === 1 ? '' : 's'}`
+}
+
+function renderInterlinks() {
+  const total =
+    currentInterlinks.links.length +
+    currentInterlinks.backlinks.length +
+    currentInterlinks.suggested.length
+
+  if (!openNoteId || total === 0) {
+    interlinksToggleEl.classList.add('hidden')
+    interlinksEl.classList.add('hidden')
+    return
+  }
+
+  interlinksToggleEl.classList.remove('hidden')
+  // The chevron points where the panel will move on the next click — up to
+  // expand (it grows upward), down to collapse.
+  interlinksToggleEl.textContent = `${interlinksExpanded ? '▾' : '▴'}  ${total} Interlink${total === 1 ? '' : 's'}`
+  interlinksEl.classList.toggle('hidden', !interlinksExpanded)
+  if (!interlinksExpanded) return
+
+  const section = (title: string, rows: HTMLElement[]) => {
+    const col = document.createElement('div')
+    col.className = 'interlink-column'
+    const h = document.createElement('h4')
+    h.textContent = title
+    col.append(h, ...rows)
+    return col
+  }
+
+  const linkRow = (ref: InterlinkRef) => {
+    const a = document.createElement('button')
+    a.type = 'button'
+    a.className = 'interlink-row'
+    a.textContent = ref.title
+    a.onclick = () => void openNote(ref.id).then(renderList)
+    return a
+  }
+
+  const cols: HTMLElement[] = []
+  // Only the non-empty sections appear, so a note with just backlinks doesn't
+  // show two empty headings beside them.
+  if (currentInterlinks.links.length) {
+    cols.push(section('Links', currentInterlinks.links.map(linkRow)))
+  }
+  if (currentInterlinks.backlinks.length) {
+    cols.push(section('Backlinks', currentInterlinks.backlinks.map(linkRow)))
+  }
+  if (currentInterlinks.suggested.length) {
+    cols.push(
+      section(
+        'Suggested',
+        currentInterlinks.suggested.map((s) => {
+          const b = document.createElement('button')
+          b.type = 'button'
+          b.className = 'interlink-row suggested'
+          b.textContent = s.title
+          b.title = 'Wrap this mention in [[…]]'
+          b.onclick = () => void linkSuggestion(s)
+          return b
+        }),
+      ),
+    )
+  }
+  interlinksEl.replaceChildren(...cols)
+}
+
+/// Wraps a suggested mention in `[[…]]` — the only thing that ever changes a
+/// note's text from the interlinks panel, and only on this explicit click.
+async function linkSuggestion(s: SuggestionDto) {
+  const text = view.state.doc.toString()
+  // Re-verify before writing: the offsets came from the store's copy, and the
+  // buffer may have moved on since. Wrapping the wrong span of someone's note
+  // is far worse than doing nothing.
+  if (text.slice(s.start, s.end).toLowerCase() !== s.title.toLowerCase()) {
+    await refreshInterlinks()
+    return
+  }
+  view.dispatch({
+    changes: [
+      { from: s.start, insert: '[[' },
+      { from: s.end, insert: ']]' },
+    ],
+  })
+  cancelPendingSave()
+  await save()
+  await refreshInterlinks()
+}
+
+async function refreshInterlinks() {
+  if (!openNoteId) {
+    currentInterlinks = { links: [], backlinks: [], suggested: [] }
+    renderInterlinks()
+    return
+  }
+  currentInterlinks = await invoke<InterlinksDto>('interlinks', { id: openNoteId })
+  renderInterlinks()
+}
+
+interlinksToggleEl.onclick = () => {
+  interlinksExpanded = !interlinksExpanded
+  saveSetting('backlinksExpanded', interlinksExpanded)
+  renderInterlinks()
+  view.requestMeasure()
+}
 
 // --- Wiki-links -------------------------------------------------------------
 
@@ -227,6 +398,9 @@ async function save() {
       content: view.state.doc.toString(),
     })
     applySavedNote(saved)
+    // Editing text can add or remove a [[link]], which changes what this note
+    // points at and what it merely mentions.
+    void refreshInterlinks()
   } catch (e) {
     console.error('save failed', e)
   }
@@ -505,6 +679,8 @@ async function openNote(id: string) {
   // styler decorates only what's in view — without a re-measure the viewport
   // it computed a moment ago may not match what's actually on screen.
   view.requestMeasure()
+  renderStats()
+  await refreshInterlinks()
 }
 
 async function openHighlighted() {
@@ -622,6 +798,9 @@ function closeEditor() {
   titleEl.value = ''
   dueEl.textContent = ''
   emptyEl.classList.remove('hidden')
+  currentInterlinks = { links: [], backlinks: [], suggested: [] }
+  renderInterlinks()
+  renderStats()
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: '' },
     effects: editable.reconfigure(EditorView.editable.of(false)),
@@ -651,6 +830,13 @@ window.addEventListener('keydown', (e) => {
     else void deleteHighlighted()
     return
   }
+  // Ctrl+Shift+B toggles the interlinks panel — the Mac's ⌘⇧B.
+  if (e.shiftKey && key === 'b') {
+    e.preventDefault()
+    interlinksToggleEl.click()
+    return
+  }
+
   // Ctrl+Shift+L toggles vertical / horizontal, the Windows spelling of ⌘⇧L.
   // Checked before plain Ctrl+L, which would otherwise swallow it.
   if (e.shiftKey && key === 'l') {
@@ -782,6 +968,17 @@ async function boot() {
 // viewport-dependent and link resolution is position-dependent, so
 // reproducing either means driving the real view rather than reasoning about
 // the regexes in isolation.
-;(window as any).__envy = { view, wikiLinkTargetAt }
+;(window as any).__envy = {
+  view,
+  wikiLinkTargetAt,
+  // Lets the interlinks panel be exercised without a backend, so its layout
+  // can be checked in a plain browser rather than by driving the real app.
+  previewInterlinks(data: InterlinksDto, expanded = true) {
+    currentInterlinks = data
+    interlinksExpanded = expanded
+    openNoteId = openNoteId ?? 'preview'
+    renderInterlinks()
+  },
+}
 
 void boot()

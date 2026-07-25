@@ -16,12 +16,14 @@
 
 pub mod due;
 pub mod filename;
+pub mod interlinks;
 pub mod note;
 pub mod search;
 pub mod store;
 pub mod watcher;
 
 pub use due::{resolve_due_token, urgency_for, DueUrgency};
+pub use interlinks::{interlinks_for, InterlinkRef, Interlinks, Suggestion};
 pub use note::{AiProvenance, Note, ParsedWikiLink, WikiLink};
 pub use search::{filtered, SearchContext};
 pub use store::{NoteStore, NoteTemplate};

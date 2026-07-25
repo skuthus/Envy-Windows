@@ -69,6 +69,7 @@ with a welcome note.
 | `Ctrl`-click a `[[link]]` | Open the linked note, creating it if needed |
 | `Ctrl+Backspace` | Delete the highlighted note |
 | `Ctrl+Shift+Backspace` | Restore the last deleted note(s) |
+| `Ctrl+Shift+B` | Toggle the interlinks panel |
 | `Ctrl+Shift+L` | Toggle vertical / horizontal layout |
 | `Ctrl+,` | Settings |
 | `Alt+↑` | Move focus from the editor back to search |

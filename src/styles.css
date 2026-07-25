@@ -268,6 +268,96 @@ html, body {
    second scrolling container here produces two nested scrollbars. */
 #editor { flex: 1; min-height: 0; overflow: hidden; }
 
+/* --- Footer and interlinks --------------------------------------------------
+   The panel sits directly above the footer bar so expanding grows it upward
+   into the editor, rather than pushing the footer down and shifting the whole
+   pane under the cursor. */
+
+#footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  padding: 4px 16px;
+  font-size: 11px;
+  color: var(--envy-blockquote);
+  background: var(--envy-title-bar-background);
+  border-top: 1px solid color-mix(in srgb, var(--envy-marker) 30%, transparent);
+}
+#stats {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+#interlinks-toggle {
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--envy-blockquote);
+  cursor: default;
+}
+#interlinks-toggle:hover {
+  color: var(--envy-text);
+  background: color-mix(in srgb, var(--envy-marker) 20%, transparent);
+}
+#interlinks-toggle.hidden { display: none; }
+
+#interlinks {
+  flex: none;
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  max-height: 40%;
+  overflow-y: auto;
+  padding: 8px 16px;
+  background: var(--envy-title-bar-background);
+  border-top: 1px solid color-mix(in srgb, var(--envy-marker) 30%, transparent);
+}
+#interlinks.hidden { display: none; }
+
+/* Columns side by side when there's room, stacked when the pane gets too
+   narrow for readable ones — which the vertical layout's editor half often
+   is. ~130px per column is the point where titles stop being legible. */
+@media (max-width: 400px) {
+  #interlinks { flex-direction: column; gap: 10px; }
+}
+
+.interlink-column { flex: 1; min-width: 0; }
+.interlink-column h4 {
+  margin: 0 0 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--envy-marker);
+}
+.interlink-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 4px;
+  margin-left: -4px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--envy-link);
+  cursor: default;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.interlink-row:hover { background: color-mix(in srgb, var(--envy-marker) 20%, transparent); }
+/* Suggested entries aren't links yet — showing them in link blue would claim a
+   connection that doesn't exist in the file. */
+.interlink-row.suggested { color: var(--envy-blockquote); font-style: italic; }
+.interlink-row.suggested:hover { color: var(--envy-link); font-style: normal; }
+
 /* --- Settings --------------------------------------------------------------- */
 
 #settings-button {

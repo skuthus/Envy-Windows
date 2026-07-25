@@ -202,6 +202,57 @@ fn restore_last_deleted(state: State<AppState>) -> Vec<NoteDto> {
         .collect()
 }
 
+#[derive(Serialize)]
+pub struct InterlinkRefDto {
+    id: String,
+    title: String,
+}
+
+#[derive(Serialize)]
+pub struct SuggestionDto {
+    title: String,
+    /// UTF-16 offsets, so the editor can use them as string indices directly.
+    start: usize,
+    end: usize,
+}
+
+#[derive(Serialize)]
+pub struct InterlinksDto {
+    links: Vec<InterlinkRefDto>,
+    backlinks: Vec<InterlinkRefDto>,
+    suggested: Vec<SuggestionDto>,
+}
+
+#[tauri::command]
+fn interlinks(id: String, state: State<AppState>) -> InterlinksDto {
+    let store = state.store.lock().unwrap();
+    let Some(note) = store.notes().iter().find(|n| n.id() == id) else {
+        return InterlinksDto {
+            links: Vec::new(),
+            backlinks: Vec::new(),
+            suggested: Vec::new(),
+        };
+    };
+    let result = envy_core::interlinks_for(note, store.notes());
+    let to_dto = |r: &envy_core::InterlinkRef| InterlinkRefDto {
+        id: r.id.clone(),
+        title: r.title.clone(),
+    };
+    InterlinksDto {
+        links: result.links.iter().map(to_dto).collect(),
+        backlinks: result.backlinks.iter().map(to_dto).collect(),
+        suggested: result
+            .suggested
+            .iter()
+            .map(|s| SuggestionDto {
+                title: s.title.clone(),
+                start: s.start,
+                end: s.end,
+            })
+            .collect(),
+    }
+}
+
 #[tauri::command]
 fn can_restore(state: State<AppState>) -> bool {
     state.store.lock().unwrap().can_restore_last_deleted()
@@ -294,6 +345,7 @@ pub fn run() {
             delete_note,
             restore_last_deleted,
             can_restore,
+            interlinks,
             set_include_subfolders,
             reveal_index,
             reload,
