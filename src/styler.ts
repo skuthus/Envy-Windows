@@ -52,6 +52,50 @@ export const plainTextField = StateField.define<boolean>({
   },
 })
 
+/// Briefly marks a range that changed outside Envy, so the edit is noticed
+/// without having to spot the diff yourself.
+///
+/// Uses the theme's highlight token — one "highlight" concept for everything
+/// in the editor, rather than a second hardcoded colour nobody can change.
+export const setFlash = StateEffect.define<{ from: number; to: number } | null>()
+
+const flashMark = Decoration.mark({ class: 'envy-flash' })
+
+export const flashField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setFlash)) {
+        return e.value && e.value.to > e.value.from
+          ? Decoration.set([flashMark.range(e.value.from, e.value.to)])
+          : Decoration.none
+      }
+    }
+    // Mapped through edits so a flash still marks the right text if something
+    // else changes while it's fading.
+    return value.map(tr.changes)
+  },
+  provide: (f) => EditorView.decorations.from(f),
+})
+
+/// The span where two versions of a note differ — a common-prefix/suffix trim
+/// rather than a real diff. It only has to be good enough to point the eye at
+/// the right paragraph, and it's exact for the common case of one edited
+/// region.
+export function changedRange(before: string, after: string): { from: number; to: number } | null {
+  if (before === after) return null
+  let start = 0
+  const max = Math.min(before.length, after.length)
+  while (start < max && before[start] === after[start]) start++
+  let endBefore = before.length
+  let endAfter = after.length
+  while (endBefore > start && endAfter > start && before[endBefore - 1] === after[endAfter - 1]) {
+    endBefore--
+    endAfter--
+  }
+  return { from: start, to: endAfter }
+}
+
 export const searchQueryField = StateField.define<string>({
   create: () => '',
   update(value, tr) {

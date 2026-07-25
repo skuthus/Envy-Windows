@@ -290,6 +290,58 @@ export const autoPairing = EditorView.inputHandler.of((view, from, to, text) => 
   return true
 })
 
+// --- Due tokens --------------------------------------------------------------
+
+const DUE_TOKEN_RE =
+  /(?<![\w])@(today|tomorrow|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|[0-9/-]+)(?!\w)/gi
+
+/// The due token at `pos`, and whether it is *tightly* wrapped in its own
+/// `~~@token~~`.
+///
+/// Tightly is deliberately narrower than "inside a strikethrough span" — which
+/// is what `Note::active_due_dates` checks, so it also recognises a due date
+/// crossed out as part of a longer struck sentence. A click can only
+/// meaningfully remove a wrap it put there itself.
+export function dueTokenAt(
+  doc: string,
+  pos: number,
+): { from: number; to: number; crossedOut: boolean } | null {
+  DUE_TOKEN_RE.lastIndex = 0
+  for (const m of doc.matchAll(DUE_TOKEN_RE)) {
+    const from = m.index!
+    const to = from + m[0].length
+    if (pos < from || pos > to) continue
+    const crossedOut = doc.slice(from - 2, from) === '~~' && doc.slice(to, to + 2) === '~~'
+    return { from, to, crossedOut }
+  }
+  return null
+}
+
+/// Clicking a due date retires it, or brings it back.
+///
+/// Wrapping in `~~` rather than deleting: the date is why the task mattered,
+/// and a note should still say what was due even once it's done.
+export function toggleDueToken(view: EditorView, pos: number): boolean {
+  const doc = view.state.doc.toString()
+  const token = dueTokenAt(doc, pos)
+  if (!token) return false
+  const text = doc.slice(token.from, token.to)
+  if (token.crossedOut) {
+    // Replaces the whole "~~@token~~" span in one edit rather than deleting
+    // either side separately, so one undo takes it back.
+    view.dispatch({
+      changes: { from: token.from - 2, to: token.to + 2, insert: text },
+      selection: EditorSelection.cursor(token.from - 2 + text.length),
+    })
+  } else {
+    view.dispatch({
+      changes: { from: token.from, to: token.to, insert: `~~${text}~~` },
+      selection: EditorSelection.cursor(token.to + 4),
+    })
+  }
+  return true
+}
+
 // --- Emphasis ----------------------------------------------------------------
 
 /// Wraps the selection in `marker`, or unwraps it if it's already immediately

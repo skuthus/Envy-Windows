@@ -842,6 +842,65 @@ body.popover {
   border-radius: 2px;
 }
 
+/* --- External-edit flash --------------------------------------------------
+   The same highlight token search matches use — one "highlight" concept for
+   everything in the editor rather than a second hardcoded colour.
+
+   The fade is a CSS transition on the way *out*: the mark appears at full
+   strength instantly, so the change is caught, then dissolves rather than
+   snapping away. Removing the decoration is what triggers it. */
+.envy-flash {
+  background: var(--envy-highlight);
+  color: var(--envy-highlight-text) !important;
+  border-radius: 2px;
+  animation: envy-flash-fade 900ms ease-out forwards;
+}
+@keyframes envy-flash-fade {
+  0%, 25% { background: var(--envy-highlight); }
+  100% { background: transparent; }
+}
+
+/* --- Link preview ---------------------------------------------------------
+   Read the linked note without leaving where you are. Capped in height, since
+   the point is a glance — following the link is what opening it is for. */
+#link-preview {
+  position: fixed;
+  z-index: 25;
+  width: min(420px, 70vw);
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  background: var(--envy-title-bar-background);
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  box-shadow: 0 10px 32px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+#link-preview.hidden { display: none; }
+#link-preview-title {
+  flex: none;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 700;
+  border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 30%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#link-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--envy-font-family);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--envy-text);
+}
+
 /* --- Footnotes / rules --------------------------------------------------- */
 .envy-footnote { color: var(--envy-footnote); font-size: 0.9em; }
 .envy-hr { color: var(--envy-marker); }

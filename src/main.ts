@@ -13,8 +13,18 @@ import {
   searchQueryField,
   setPlainText,
   setSearchQuery,
+  changedRange,
+  flashField,
+  setFlash,
 } from './styler'
-import { autoPairing, completionTransforms, emphasisKeymap, pairingEdit } from './input'
+import {
+  autoPairing,
+  completionTransforms,
+  emphasisKeymap,
+  pairingEdit,
+  dueTokenAt,
+  toggleDueToken,
+} from './input'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 
 interface NoteDto {
@@ -80,6 +90,7 @@ const view = new EditorView({
       autoPairing,
       searchQueryField,
       plainTextField,
+      flashField,
       embedHost.of({
         // Resolved by title on every mount rather than handed a pre-fetched
         // note, so "the source was renamed" and "the source doesn't exist
@@ -106,9 +117,27 @@ const view = new EditorView({
           // edit it — the two gestures would otherwise fight.
           // Turning the setting off trades that away for a plain click.
           if (event.button !== 0) return false
-          if (settings.requireModifierForLinkClick && !event.ctrlKey) return false
           const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
           if (pos === null) return false
+
+          // Alt-click previews a link instead of following it.
+          if (event.altKey && settings.linkPreview !== 'off') {
+            const target = wikiLinkTargetAt(v, pos)
+            if (!target) return false
+            event.preventDefault()
+            void showLinkPreview(target, event.clientX, event.clientY)
+            return true
+          }
+
+          // Clicking a due date retires it, or brings it back. Checked before
+          // links because the two never overlap, and before the modifier gate
+          // because retiring a date is a plain click.
+          if (!event.ctrlKey && !event.altKey && toggleDueToken(v, pos)) {
+            event.preventDefault()
+            return true
+          }
+
+          if (settings.requireModifierForLinkClick && !event.ctrlKey) return false
           const target = wikiLinkTargetAt(v, pos)
           if (!target) return false
           event.preventDefault()
@@ -549,6 +578,7 @@ const settings = {
   requireModifierForLinkClick: boolSetting('requireModifierForLinkClick', true),
   showBacklinks: boolSetting('showBacklinks', true),
   hideOnBlur: boolSetting('hideOnFocusLoss', false),
+  linkPreview: localStorage.getItem('linkPreviewTrigger') ?? 'altClick',
   templateDateFormat: localStorage.getItem('templateDateFormat') ?? 'yyyy-MM-dd',
   trashMaxAgeDays: Number(localStorage.getItem('trashMaxAgeDays') ?? '0'),
 }
@@ -782,6 +812,61 @@ function renderList() {
     }),
   )
 }
+
+/// Briefly highlights text that changed on disk, so an external edit is
+/// noticed without having to spot the diff yourself.
+///
+/// The fade is a CSS transition rather than stepped in JS — the Mac steps the
+/// alpha by hand only because text attributes aren't animatable properties.
+/// Here they are.
+let flashTimer: number | undefined
+function flashChangedRange(range: { from: number; to: number } | null) {
+  window.clearTimeout(flashTimer)
+  if (!range) return
+  view.dispatch({ effects: setFlash.of(range) })
+  flashTimer = window.setTimeout(() => {
+    flashTimer = undefined
+    view.dispatch({ effects: setFlash.of(null) })
+  }, 900)
+}
+
+// --- Link preview ------------------------------------------------------------
+// Alt-click a [[link]] to read the note without leaving where you are.
+//
+// Deliberately a modifier-click rather than hover, following the Mac: a popover
+// that appears from a passing hover can sit exactly where a Ctrl-click was
+// aimed, and the two gestures collide. Alt has no competing meaning here.
+
+const linkPreviewEl = document.getElementById('link-preview')!
+const linkPreviewTitleEl = document.getElementById('link-preview-title')!
+const linkPreviewBodyEl = document.getElementById('link-preview-body')!
+
+function hideLinkPreview() {
+  linkPreviewEl.classList.add('hidden')
+}
+
+async function showLinkPreview(target: string, x: number, y: number) {
+  const note = await invoke<NoteDto | null>('resolve_title', { title: target })
+  linkPreviewTitleEl.textContent = note ? note.title : target
+  linkPreviewBodyEl.textContent = note
+    ? (note.content ?? '')
+    : "This note doesn't exist yet. Ctrl-click the link to create it."
+  linkPreviewEl.classList.remove('hidden')
+
+  // Placed after it has a size, and flipped rather than allowed off-screen.
+  const { width, height } = linkPreviewEl.getBoundingClientRect()
+  const left = x + width > window.innerWidth ? Math.max(8, x - width) : x
+  const top = y + height > window.innerHeight ? Math.max(8, y - height) : y + 18
+  linkPreviewEl.style.left = `${left}px`
+  linkPreviewEl.style.top = `${top}px`
+}
+
+window.addEventListener('mousedown', (e) => {
+  if (!linkPreviewEl.contains(e.target as Node)) hideLinkPreview()
+}, true)
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') hideLinkPreview()
+})
 
 // --- Zoom and plain-text mode -----------------------------------------------
 
@@ -1646,6 +1731,7 @@ void listen('index-changed', async () => {
     const fresh = await invoke<NoteDto | null>('read_note', { id: openNoteId })
     if (fresh && fresh.content !== null && fresh.content !== view.state.doc.toString()) {
       const cursor = view.state.selection.main.head
+      const changed = changedRange(view.state.doc.toString(), fresh.content)
       view.dispatch({
         changes: { from: 0, to: view.state.doc.length, insert: fresh.content },
         selection: { anchor: Math.min(cursor, fresh.content.length) },
@@ -1653,6 +1739,7 @@ void listen('index-changed', async () => {
       // What's on disk is now what's in the buffer, so a later save has
       // nothing to write until the text actually changes again.
       openNoteSavedContent = fresh.content
+      flashChangedRange(changed)
     }
   }
 })
@@ -1730,6 +1817,7 @@ function openSettings() {
   checkbox('setting-show-interlinks').checked = settings.showBacklinks
   checkbox('setting-hide-on-blur').checked = settings.hideOnBlur
   dropdown('setting-date-style').value = settings.dateDisplayStyle
+  dropdown('setting-link-preview').value = settings.linkPreview
   dropdown('setting-trash-age').value = String(settings.trashMaxAgeDays)
   el<HTMLInputElement>('setting-template-date').value = settings.templateDateFormat
   updateTemplateDatePreview()
@@ -1803,6 +1891,12 @@ dropdown('setting-date-style').onchange = (e) => {
   settings.dateDisplayStyle = (e.target as HTMLSelectElement).value
   saveSetting('dateDisplayStyle', settings.dateDisplayStyle)
   renderList()
+}
+
+dropdown('setting-link-preview').onchange = (e) => {
+  settings.linkPreview = (e.target as HTMLSelectElement).value
+  saveSetting('linkPreviewTrigger', settings.linkPreview)
+  if (settings.linkPreview === 'off') hideLinkPreview()
 }
 
 dropdown('setting-trash-age').onchange = (e) => {
@@ -1953,6 +2047,9 @@ async function boot() {
   setSearchQuery,
   searchQueryField,
   pairingEdit,
+  dueTokenAt,
+  toggleDueToken,
+  changedRange,
   previewInterlinks(data: InterlinksDto, expanded = true) {
     currentInterlinks = data
     interlinksExpanded = expanded

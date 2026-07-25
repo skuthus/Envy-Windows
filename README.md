@@ -72,6 +72,8 @@ with a welcome note.
 | `↑` / `↓` | Move the highlighted note |
 | `Return` | Open the top match, or create a note from what you typed |
 | `Ctrl`-click a `[[link]]` | Open the linked note, creating it if needed |
+| `Alt`-click a `[[link]]` | Preview it without leaving where you are |
+| Click a due date | Retire it (or bring it back) |
 | `Ctrl+Backspace` | Delete the highlighted note |
 | `Ctrl+Shift+Backspace` | Restore the last deleted note(s) |
 | `Ctrl+B` / `Ctrl+I` | Bold / italicise the selection (wraps, or unwraps) |

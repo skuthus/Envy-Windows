@@ -83,6 +83,14 @@
 
       <div id="context-menu" class="hidden" role="menu"></div>
 
+      <!-- Alt-click a [[link]] to read the note without leaving where you are.
+           Deliberately a modifier-click rather than hover: a popover appearing
+           from a passing hover can sit exactly where a Ctrl-click was aimed. -->
+      <div id="link-preview" class="hidden" role="dialog" aria-label="Linked note">
+        <div id="link-preview-title"></div>
+        <pre id="link-preview-body"></pre>
+      </div>
+
       <div id="settings" class="hidden" role="dialog" aria-label="Settings">
         <div id="settings-panel">
           <header>
@@ -194,6 +202,13 @@
             <label>
               <input type="checkbox" id="setting-require-modifier" />
               Require Ctrl-click to open note links
+            </label>
+            <label>
+              Preview linked notes
+              <select id="setting-link-preview">
+                <option value="altClick">Alt-Click</option>
+                <option value="off">Off</option>
+              </select>
             </label>
             <label>
               <input type="checkbox" id="setting-show-interlinks" />
