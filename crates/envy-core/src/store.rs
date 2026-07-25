@@ -124,6 +124,34 @@ impl NoteStore {
         Ok(note)
     }
 
+    /// The note whose title matches `query` exactly, case-insensitively —
+    /// the same comparison `Note::wiki_links` lowercases its targets with, so
+    /// a link resolves here exactly when it registers as a backlink there.
+    pub fn exact_title_match(&self, query: &str) -> Option<&Note> {
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            return None;
+        }
+        self.notes.iter().find(|n| n.lowercased_title() == q)
+    }
+
+    /// Follows a `[[wiki-link]]`: returns the note it points at, creating it if
+    /// it doesn't exist yet.
+    ///
+    /// A link-created note always lands in the Index proper, never `Inbox/`,
+    /// even when "new notes start in the Inbox" is on — the same carve-out the
+    /// Mac makes for links and templates alike. Both are *already placed*: you
+    /// said where this note belongs by linking to it from somewhere, so
+    /// routing it through a capture queue would be asking a question you've
+    /// already answered.
+    pub fn open_or_create_link(&mut self, target: &str) -> std::io::Result<Note> {
+        if let Some(found) = self.exact_title_match(target) {
+            return Ok(found.clone());
+        }
+        let dir = self.directory.clone();
+        self.create_in(target, dir)
+    }
+
     pub fn save(&mut self, note: &Note) -> std::io::Result<()> {
         fs::write(note.url(), note.content())?;
         if let Some(existing) = self.notes.iter_mut().find(|n| n.id() == note.id()) {

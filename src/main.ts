@@ -2,8 +2,9 @@ import { EditorView, keymap, drawSelection, rectangularSelection } from '@codemi
 import { EditorState, Compartment } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { envyStyler } from './styler'
-import { applyTheme, enviousDark } from './theme'
+import { applyTheme, enviousDark, enviousLight } from './theme'
 
 interface NoteDto {
   id: string
@@ -49,6 +50,22 @@ const view = new EditorView({
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
       envyStyler,
+      EditorView.domEventHandlers({
+        mousedown: (event, v) => {
+          // Ctrl+click follows a link, the Windows spelling of ⌘-click. Envy
+          // requires a modifier by default (`requireModifierForLinkClick`) so
+          // an ordinary click can still place the cursor inside a link to
+          // edit it — the two gestures would otherwise fight.
+          if (!event.ctrlKey || event.button !== 0) return false
+          const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
+          if (pos === null) return false
+          const target = wikiLinkTargetAt(v, pos)
+          if (!target) return false
+          event.preventDefault()
+          void followLink(target)
+          return true
+        },
+      }),
       editable.of(EditorView.editable.of(false)),
       EditorView.updateListener.of((u) => {
         if (u.docChanged && openNoteId) scheduleSave()
@@ -69,6 +86,45 @@ const view = new EditorView({
   }),
   parent: editorEl,
 })
+
+// --- Wiki-links -------------------------------------------------------------
+
+/// The link target under `pos`, or null if the position isn't inside one.
+///
+/// Scans the clicked line rather than consulting the decorations: the styler's
+/// ranges aren't addressable after the fact, and a line is short enough that
+/// re-matching it costs nothing. Handles `![[embed]]` too — the leading `!`
+/// changes how it renders, not where it points.
+function wikiLinkTargetAt(v: EditorView, pos: number): string | null {
+  const line = v.state.doc.lineAt(pos)
+  const re = /!?\[\[([^\[\]]+)\]\]/g
+  for (const m of line.text.matchAll(re)) {
+    const from = line.from + m.index!
+    const to = from + m[0].length
+    if (pos >= from && pos <= to) {
+      // Strip an alias or heading suffix — `[[Note|shown]]` points at `Note`,
+      // and `[[Note#Heading]]` resolves to the note. Mirrors WikiLink::parse.
+      const body = m[1]
+      const target = body.split('|')[0].split('#')[0].trim()
+      return target || null
+    }
+  }
+  return null
+}
+
+async function followLink(target: string) {
+  // Flush the current note first: following a link that creates a note causes
+  // a rescan, and an unsaved buffer would be read back stale.
+  cancelPendingSave()
+  await save()
+  const note = await invoke<NoteDto>('open_link', { target })
+  await runSearch()
+  await openNote(note.id)
+  highlighted = results.findIndex((n) => n.id === note.id)
+  if (highlighted < 0) highlighted = 0
+  renderList()
+  view.focus()
+}
 
 // --- Layout -----------------------------------------------------------------
 // Vertical (list above, note below) is the default and the layout the app is
@@ -143,8 +199,19 @@ dividerEl.addEventListener('pointerdown', (e) => {
 })
 
 function scheduleSave() {
+  cancelPendingSave()
+  saveTimer = window.setTimeout(() => {
+    saveTimer = undefined
+    void save()
+  }, 400)
+}
+
+/// Clearing the handle is not bookkeeping pedantry: `saveTimer === undefined`
+/// is what "no unsaved keystrokes in flight" is read from, and a stale handle
+/// would make the watcher refuse to ever refresh the open note.
+function cancelPendingSave() {
   window.clearTimeout(saveTimer)
-  saveTimer = window.setTimeout(save, 400)
+  saveTimer = undefined
 }
 
 async function save() {
@@ -278,7 +345,7 @@ async function runSearch() {
 
 async function openNote(id: string) {
   // Flush any pending edit to the note we're leaving before switching.
-  window.clearTimeout(saveTimer)
+  cancelPendingSave()
   await save()
 
   const note = await invoke<NoteDto | null>('read_note', { id })
@@ -344,9 +411,55 @@ searchInput.addEventListener('keydown', (e) => {
   }
 })
 
+async function deleteHighlighted() {
+  const target = results[highlighted]
+  if (!target) return
+  // Drop the pending save first — it would recreate the file we just trashed.
+  cancelPendingSave()
+  if (openNoteId === target.id) openNoteId = null
+  await invoke('delete_note', { id: target.id })
+  if (openNoteId === null) closeEditor()
+  await runSearch()
+}
+
+async function restoreDeleted() {
+  const restored = await invoke<NoteDto[]>('restore_last_deleted')
+  await runSearch()
+  if (restored.length > 0) {
+    highlighted = Math.max(
+      0,
+      results.findIndex((n) => n.id === restored[0].id),
+    )
+    renderList()
+  }
+}
+
+function closeEditor() {
+  openNoteId = null
+  titleEl.textContent = ''
+  dueEl.textContent = ''
+  emptyEl.classList.remove('hidden')
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: '' },
+    effects: editable.reconfigure(EditorView.editable.of(false)),
+  })
+}
+
 window.addEventListener('keydown', (e) => {
   if (!e.ctrlKey) return
   const key = e.key.toLowerCase()
+
+  // Delete is Ctrl+Backspace and restore is Ctrl+Shift+Backspace, matching the
+  // Mac's ⌘⌫ / ⌘⇧⌫. Deliberately not the bare Del key, which Windows
+  // convention would suggest — inside the editor Del is forward-delete, and a
+  // shortcut that destroys the note you're typing in depending on focus is a
+  // bad trade for idiom.
+  if (key === 'backspace') {
+    e.preventDefault()
+    if (e.shiftKey) void restoreDeleted()
+    else void deleteHighlighted()
+    return
+  }
   // Ctrl+Shift+L toggles vertical / horizontal, the Windows spelling of ⌘⇧L.
   // Checked before plain Ctrl+L, which would otherwise swallow it.
   if (e.shiftKey && key === 'l') {
@@ -362,15 +475,38 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('resize', () => view.requestMeasure())
 
-// No file watcher yet, so a note edited in another app is picked up when the
-// window regains focus. The watcher will make this automatic.
-window.addEventListener('focus', async () => {
-  await invoke('reload')
+// The backend rescans and emits; the frontend re-runs its own query rather
+// than being handed results, so a reload can't clobber whatever has since been
+// typed into the search box.
+void listen('index-changed', async () => {
   await runSearch()
+  // Reload the open note too, unless there are unsaved keystrokes in flight —
+  // overwriting the buffer someone is typing into is worse than showing them
+  // a stale copy for another moment.
+  if (openNoteId && saveTimer === undefined) {
+    const fresh = await invoke<NoteDto | null>('read_note', { id: openNoteId })
+    if (fresh && fresh.content !== null && fresh.content !== view.state.doc.toString()) {
+      const cursor = view.state.selection.main.head
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: fresh.content },
+        selection: { anchor: Math.min(cursor, fresh.content.length) },
+      })
+    }
+  }
 })
 
+// Envious ships a light and a dark face and follows the OS, rather than
+// freezing on whichever was picked — `AppearanceMode.system` on the Mac.
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
+function syncTheme() {
+  // Every color is a CSS variable, so swapping the token set is the whole
+  // switch — no light-mode stylesheet to keep in step.
+  applyTheme(darkQuery.matches ? enviousDark : enviousLight)
+}
+darkQuery.addEventListener('change', syncTheme)
+
 async function boot() {
-  applyTheme(enviousDark)
+  syncTheme()
   applyLayout()
   const dir = await invoke<string>('index_directory')
   searchInput.placeholder = `Search ${dir}…`
@@ -378,9 +514,10 @@ async function boot() {
   searchInput.focus()
 }
 
-// Exposed for debugging the styler from the webview console — the decoration
-// pass is viewport-dependent, so reproducing a problem usually means driving
-// the real view rather than reasoning about the regexes in isolation.
-;(window as any).__view = view
+// Exposed for debugging from the webview console. The decoration pass is
+// viewport-dependent and link resolution is position-dependent, so
+// reproducing either means driving the real view rather than reasoning about
+// the regexes in isolation.
+;(window as any).__envy = { view, wikiLinkTargetAt }
 
 void boot()

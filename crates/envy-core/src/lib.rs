@@ -19,8 +19,10 @@ pub mod filename;
 pub mod note;
 pub mod search;
 pub mod store;
+pub mod watcher;
 
 pub use due::{resolve_due_token, urgency_for, DueUrgency};
 pub use note::{AiProvenance, Note, ParsedWikiLink, WikiLink};
 pub use search::{filtered, SearchContext};
 pub use store::{NoteStore, NoteTemplate};
+pub use watcher::{watch_path, IndexWatcher};

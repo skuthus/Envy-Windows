@@ -5,11 +5,12 @@
 //! serializes across the boundary.
 
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-use envy_core::{NoteStore, SearchContext};
+use envy_core::{IndexWatcher, NoteStore, SearchContext};
 use serde::Serialize;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 /// A note as the frontend sees it. The store's `Note` isn't serialized
 /// directly — its derived values are lazy and private, and the UI wants them
@@ -61,6 +62,21 @@ impl NoteDto {
 
 pub struct AppState {
     store: Mutex<NoteStore>,
+    /// Envy's own writes trip the watcher exactly like an external edit would.
+    /// Suppressing a brief window after each one stops a redundant rescan —
+    /// and, more importantly, stops a reload landing on top of text the user
+    /// is still typing. This is `markInternalWrite` on the Mac.
+    suppress_until: Arc<Mutex<Instant>>,
+    /// Held only to keep the watch alive; dropping it stops the watcher.
+    _watcher: Mutex<Option<IndexWatcher>>,
+}
+
+const SUPPRESS_WINDOW: Duration = Duration::from_millis(500);
+
+impl AppState {
+    fn mark_internal_write(&self) {
+        *self.suppress_until.lock().unwrap() = Instant::now() + SUPPRESS_WINDOW;
+    }
 }
 
 fn default_index_directory() -> PathBuf {
@@ -104,6 +120,7 @@ fn read_note(id: String, state: State<AppState>) -> Option<NoteDto> {
 
 #[tauri::command]
 fn save_note(id: String, content: String, state: State<AppState>) -> Result<(), String> {
+    state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
     let Some(mut note) = store.notes().iter().find(|n| n.id() == id).cloned() else {
         return Err(format!("no note with id {id}"));
@@ -114,6 +131,7 @@ fn save_note(id: String, content: String, state: State<AppState>) -> Result<(), 
 
 #[tauri::command]
 fn create_note(title: String, state: State<AppState>) -> Result<NoteDto, String> {
+    state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
     store
         .create(&title)
@@ -121,8 +139,21 @@ fn create_note(title: String, state: State<AppState>) -> Result<NoteDto, String>
         .map_err(|e| e.to_string())
 }
 
+/// Follows a `[[wiki-link]]`, creating the target note if it doesn't exist —
+/// which is most of what makes linking feel immediate rather than clerical.
+#[tauri::command]
+fn open_link(target: String, state: State<AppState>) -> Result<NoteDto, String> {
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    store
+        .open_or_create_link(&target)
+        .map(|n| NoteDto::from_note(&n, true))
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn rename_note(id: String, title: String, state: State<AppState>) -> Result<NoteDto, String> {
+    state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
     let Some(note) = store.notes().iter().find(|n| n.id() == id).cloned() else {
         return Err(format!("no note with id {id}"));
@@ -135,6 +166,7 @@ fn rename_note(id: String, title: String, state: State<AppState>) -> Result<Note
 
 #[tauri::command]
 fn delete_note(id: String, state: State<AppState>) -> Result<(), String> {
+    state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
     let Some(note) = store.notes().iter().find(|n| n.id() == id).cloned() else {
         return Err(format!("no note with id {id}"));
@@ -145,12 +177,18 @@ fn delete_note(id: String, state: State<AppState>) -> Result<(), String> {
 
 #[tauri::command]
 fn restore_last_deleted(state: State<AppState>) -> Vec<NoteDto> {
+    state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
     store
         .restore_last_deleted()
         .iter()
         .map(|n| NoteDto::from_note(n, false))
         .collect()
+}
+
+#[tauri::command]
+fn can_restore(state: State<AppState>) -> bool {
+    state.store.lock().unwrap().can_restore_last_deleted()
 }
 
 /// Re-reads the Index from disk. Called on window focus for now — the file
@@ -179,8 +217,33 @@ pub fn run() {
                 }
             }
             let store = NoteStore::open(&dir, false)?;
+
+            let suppress_until = Arc::new(Mutex::new(Instant::now()));
+
+            let handle = app.handle().clone();
+            let suppress = Arc::clone(&suppress_until);
+            let watcher = envy_core::watch_path(dir.clone(), move || {
+                // Envy's own writes trip the watcher too. Skipping them avoids
+                // a redundant rescan and, more importantly, avoids reloading
+                // over text still being typed.
+                if Instant::now() < *suppress.lock().unwrap() {
+                    return;
+                }
+                let Some(state) = handle.try_state::<AppState>() else {
+                    return;
+                };
+                state.store.lock().unwrap().reload();
+                // The frontend re-runs its query rather than being handed
+                // results, so a reload can't clobber whatever the user has
+                // since typed into the search box.
+                let _ = handle.emit("index-changed", ());
+            })
+            .ok();
+
             app.manage(AppState {
                 store: Mutex::new(store),
+                suppress_until,
+                _watcher: Mutex::new(watcher),
             });
             Ok(())
         })
@@ -190,9 +253,11 @@ pub fn run() {
             read_note,
             save_note,
             create_note,
+            open_link,
             rename_note,
             delete_note,
             restore_last_deleted,
+            can_restore,
             reload,
         ])
         .run(tauri::generate_context!())
