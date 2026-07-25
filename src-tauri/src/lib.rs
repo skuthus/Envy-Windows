@@ -203,6 +203,57 @@ fn restore_last_deleted(state: State<AppState>) -> Vec<NoteDto> {
 }
 
 #[derive(Serialize)]
+pub struct TemplateDto {
+    id: String,
+    name: String,
+}
+
+/// Templates whose name contains `fragment`. An empty fragment (just
+/// "template:" typed so far) matches everything, the same way `tag:` shows
+/// everything until you narrow it.
+#[tauri::command]
+fn list_templates(fragment: String, state: State<AppState>) -> Vec<TemplateDto> {
+    let needle = fragment.trim().to_lowercase();
+    state
+        .store
+        .lock()
+        .unwrap()
+        .templates()
+        .into_iter()
+        .filter(|t| needle.is_empty() || t.name.to_lowercase().contains(&needle))
+        .map(|t| TemplateDto {
+            id: t.path.to_string_lossy().into_owned(),
+            name: t.name,
+        })
+        .collect()
+}
+
+/// A template is a plain `.md` file, so this is a plain read — deliberately
+/// not routed through the note store, which never treats one as a note.
+#[tauri::command]
+fn read_template(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn save_template(path: String, content: String, state: State<AppState>) -> Result<(), String> {
+    // Templates live inside The Index, so writing one trips the watcher just
+    // like a note does.
+    state.mark_internal_write();
+    std::fs::write(&path, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn create_inbox_note(title: String, state: State<AppState>) -> Result<NoteDto, String> {
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    store
+        .create_inbox_note(&title)
+        .map(|n| NoteDto::from_note(&n, true))
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Serialize)]
 pub struct InterlinkRefDto {
     id: String,
     title: String,
@@ -346,6 +397,10 @@ pub fn run() {
             restore_last_deleted,
             can_restore,
             interlinks,
+            list_templates,
+            read_template,
+            save_template,
+            create_inbox_note,
             set_include_subfolders,
             reveal_index,
             reload,

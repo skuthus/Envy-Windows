@@ -81,7 +81,7 @@ const view = new EditorView({
       }),
       editable.of(EditorView.editable.of(false)),
       EditorView.updateListener.of((u) => {
-        if (u.docChanged && openNoteId) {
+        if (u.docChanged && (openNoteId || openTemplatePath)) {
           scheduleSave()
           // Counts track the buffer, not the saved file — they should move as
           // you type, not lag 400ms behind on the save debounce.
@@ -157,7 +157,7 @@ function countWords(text: string): number {
 }
 
 function renderStats() {
-  if (!openNoteId) {
+  if (!openNoteId && !openTemplatePath) {
     statsEl.textContent = ''
     return
   }
@@ -399,11 +399,22 @@ function cancelPendingSave() {
 }
 
 async function save() {
-  if (!openNoteId) return
   const content = view.state.doc.toString()
   // Nothing changed — writing anyway would touch the modified time and
   // reorder the list for no reason.
   if (content === openNoteSavedContent) return
+
+  if (openTemplatePath) {
+    try {
+      await invoke('save_template', { path: openTemplatePath, content })
+      openNoteSavedContent = content
+    } catch (e) {
+      console.error('template save failed', e)
+    }
+    return
+  }
+
+  if (!openNoteId) return
   try {
     const saved = await invoke<NoteDto>('save_note', {
       id: openNoteId,
@@ -666,7 +677,83 @@ function renderList() {
   )
 }
 
+// --- Templates --------------------------------------------------------------
+// A template is a plain .md file in the Index's Templates/ folder — never a
+// note, and never in the search results. `template:` swaps the list over to
+// showing them, live and editable, the same shape trash: and inbox: use.
+
+interface TemplateDto {
+  id: string
+  name: string
+}
+
+let templateResults: TemplateDto[] = []
+/// Set while a template (rather than a note) is open in the editor, so saves
+/// route to the template file instead of the store.
+let openTemplatePath: string | null = null
+
+function renderTemplateList() {
+  countEl.textContent = templateResults.length ? String(templateResults.length) : ''
+  listEl.replaceChildren(
+    ...templateResults.map((t, i) => {
+      const row = document.createElement('div')
+      row.className = 'row' + (i === highlighted ? ' highlighted' : '')
+      const title = document.createElement('div')
+      title.className = 'row-title'
+      title.textContent = t.name
+      const kind = document.createElement('span')
+      kind.className = 'row-date'
+      kind.textContent = 'Template'
+      row.append(title, kind)
+      row.onclick = () => {
+        highlighted = i
+        void openTemplate(t)
+      }
+      return row
+    }),
+  )
+}
+
+async function openTemplate(t: TemplateDto) {
+  cancelPendingSave()
+  await save()
+  const content = await invoke<string>('read_template', { path: t.id })
+  openNoteId = null
+  openTemplatePath = t.id
+  openNoteSavedContent = content
+  titleEl.value = t.name
+  titleEl.disabled = true // renaming templates isn't wired up yet
+  renderDueBadge(null)
+  emptyEl.classList.add('hidden')
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: content },
+    effects: editable.reconfigure(EditorView.editable.of(true)),
+    selection: { anchor: 0 },
+  })
+  view.requestMeasure()
+  currentInterlinks = { links: [], backlinks: [], suggested: [] }
+  renderInterlinks()
+  renderStats()
+  view.focus()
+}
+
+async function openHighlightedTemplate() {
+  const t = templateResults[highlighted]
+  if (!t) return
+  await openTemplate(t)
+  renderTemplateList()
+}
+
 async function runSearch() {
+  const fragment = templateFragment()
+  if (fragment !== null) {
+    templateResults = await invoke<TemplateDto[]>('list_templates', { fragment })
+    results = []
+    highlighted = 0
+    renderTemplateList()
+    return
+  }
+  templateResults = []
   results = await invoke<NoteDto[]>('search', { query: searchInput.value })
   highlighted = 0
   renderList()
@@ -680,8 +767,10 @@ async function openNote(id: string) {
   const note = await invoke<NoteDto | null>('read_note', { id })
   if (!note) return
   openNoteId = note.id
+  openTemplatePath = null
   openNoteSavedContent = note.content ?? ''
   titleEl.value = note.title
+  titleEl.disabled = false
   renderDueBadge(note.due)
   emptyEl.classList.add('hidden')
   view.dispatch({
@@ -704,16 +793,103 @@ async function openHighlighted() {
   renderList()
 }
 
-/// Return opens the top match, or creates a note from the search text when
-/// nothing matches — the single interaction the whole app is built around.
+// --- Query shapes -----------------------------------------------------------
+
+/// Prefix operators that scope the *whole* box rather than filtering within
+/// it. Each shows its own kind of thing in the list.
+function prefixFragment(query: string, prefix: string): string | null {
+  const trimmed = query.trim()
+  return trimmed.toLowerCase().startsWith(prefix)
+    ? trimmed.slice(prefix.length)
+    : null
+}
+
+const templateFragment = () => prefixFragment(searchInput.value, 'template:')
+const inboxFragment = () => prefixFragment(searchInput.value, 'inbox:')
+const trashFragment = () => prefixFragment(searchInput.value, 'trash:')
+
+/// Whether any word in the query is a search operator.
+///
+/// This is what stops Return creating a note literally named `tag:xyz`. Every
+/// operator counts, not just the prefix ones — the query is a filter, and a
+/// filter that matches nothing means "nothing matched", not "make me a note
+/// called that".
+function containsSearchOperator(query: string): boolean {
+  return query
+    .trim()
+    .split(/\s+/)
+    .some((raw) => {
+      const w = raw.toLowerCase()
+      return (
+        /^-?(tag|date|due|link|template|trash|inbox|ai):/.test(w) ||
+        w === 'orphan:' ||
+        w === 'linked:' ||
+        w === 'todo:' ||
+        w === '-todo:' ||
+        w === '-ai:' ||
+        (w.startsWith('-') && w.length > 1)
+      )
+    })
+}
+
+/// Return: open the top match, or create a note from what was typed.
+///
+/// The exceptions matter as much as the rule:
+///
+/// - `template:` opens the highlighted template for editing.
+/// - `trash:` never acts. Restore and delete are always explicit, never a side
+///   effect of pressing Return while browsing.
+/// - `inbox:` is the one browse operator where Return *writes*: typing
+///   `inbox: call mom` captures it. The operator that scopes the box is the one
+///   that routes writing into it, so there's no second syntax to learn. A bare
+///   `inbox:`, or an exact match on something already waiting, just opens it.
+/// - Any other operator query opens the highlighted note and never creates,
+///   since the query is a filter rather than a title.
 async function openOrCreate() {
-  const query = searchInput.value.trim()
+  const raw = searchInput.value
+  const query = raw.trim()
+
+  if (templateFragment() !== null) {
+    await openHighlightedTemplate()
+    return
+  }
+  if (trashFragment() !== null) return
+
+  const inbox = inboxFragment()
+  if (inbox !== null) {
+    const title = inbox.trim()
+    const existing = results.some((n) => n.title.toLowerCase() === title.toLowerCase())
+    if (!title || existing) {
+      await openHighlighted()
+      view.focus()
+      return
+    }
+    await captureToInbox(title)
+    return
+  }
+
+  if (containsSearchOperator(query)) {
+    await openHighlighted()
+    view.focus()
+    return
+  }
+
+  // An exact title match opens rather than duplicating.
+  const exact = results.find((n) => n.title.toLowerCase() === query.toLowerCase())
+  if (exact) {
+    await openNote(exact.id)
+    highlighted = results.findIndex((n) => n.id === exact.id)
+    renderList()
+    view.focus()
+    return
+  }
   if (results.length > 0) {
     await openHighlighted()
     view.focus()
     return
   }
   if (!query) return
+
   const created = await invoke<NoteDto>('create_note', { title: query })
   searchInput.value = ''
   await runSearch()
@@ -722,17 +898,40 @@ async function openOrCreate() {
   view.focus()
 }
 
+async function captureToInbox(title: string) {
+  const note = await invoke<NoteDto>('create_inbox_note', { title })
+  // Back to a bare "inbox:" — you're still in the box, ready for the next
+  // thought, rather than leaving the last capture sitting there looking like
+  // a filter.
+  searchInput.value = 'inbox:'
+  await runSearch()
+  await openNote(note.id)
+  highlighted = Math.max(0, results.findIndex((n) => n.id === note.id))
+  renderList()
+  view.focus()
+}
+
 searchInput.addEventListener('input', () => void runSearch())
+
+/// Whichever list is on screen — notes, or templates while `template:` is
+/// typed. Arrowing has to move through what's actually shown.
+function currentListLength(): number {
+  return templateFragment() !== null ? templateResults.length : results.length
+}
+function renderCurrentList() {
+  if (templateFragment() !== null) renderTemplateList()
+  else renderList()
+}
 
 searchInput.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown') {
     e.preventDefault()
-    highlighted = Math.min(highlighted + 1, results.length - 1)
-    renderList()
+    highlighted = Math.min(highlighted + 1, currentListLength() - 1)
+    renderCurrentList()
   } else if (e.key === 'ArrowUp') {
     e.preventDefault()
     highlighted = Math.max(highlighted - 1, 0)
-    renderList()
+    renderCurrentList()
   } else if (e.key === 'Enter') {
     e.preventDefault()
     void openOrCreate()
@@ -809,8 +1008,10 @@ titleEl.addEventListener('blur', () => void commitRename())
 
 function closeEditor() {
   openNoteId = null
+  openTemplatePath = null
   openNoteSavedContent = ''
   titleEl.value = ''
+  titleEl.disabled = false
   dueEl.textContent = ''
   emptyEl.classList.remove('hidden')
   currentInterlinks = { links: [], backlinks: [], suggested: [] }
