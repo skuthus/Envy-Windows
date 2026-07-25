@@ -78,6 +78,37 @@ html, body {
   box-shadow: 0 0 0 3px var(--envy-focus-highlight, transparent);
 }
 #search::placeholder { color: var(--envy-marker); }
+
+/* The fleeting-note count, left of the field. A circle matching the field's
+   own height rather than a fixed size, so it stays a circle rather than
+   drifting into an oval if the field's padding changes. */
+#inbox-badge {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: color-mix(in srgb, var(--envy-due-soon) 18%, transparent);
+  color: var(--envy-due-soon);
+  cursor: default;
+}
+#inbox-badge:hover { background: color-mix(in srgb, var(--envy-due-soon) 30%, transparent); }
+#inbox-badge.hidden { display: none; }
+/* On the way out it is a chevron, not a count — the same control doing the
+   opposite job, so it drops the amber that means "waiting". */
+#inbox-badge.leaving {
+  background: color-mix(in srgb, var(--envy-marker) 15%, transparent);
+  color: var(--envy-blockquote);
+  font-size: 16px;
+  line-height: 1;
+}
 #count {
   min-width: 2ch;
   text-align: right;
@@ -638,6 +669,30 @@ body.popover {
   margin-left: 6px;
   font-size: 11px;
   cursor: default;
+}
+
+/* Submit / Delete for a fleeting note. Present only while reviewing one, so
+   the title bar doesn't carry two buttons that never apply. */
+#fleeting-actions { display: flex; gap: 6px; flex: none; }
+#fleeting-actions.hidden { display: none; }
+#fleeting-actions button {
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: transparent;
+  color: var(--envy-text);
+  cursor: default;
+  white-space: nowrap;
+}
+#fleeting-actions button:hover { background: color-mix(in srgb, var(--envy-marker) 20%, transparent); }
+#fleeting-actions button.destructive {
+  color: var(--envy-due-overdue);
+  border-color: color-mix(in srgb, var(--envy-due-overdue) 55%, transparent);
+}
+#fleeting-actions button.destructive:hover {
+  background: color-mix(in srgb, var(--envy-due-overdue) 18%, transparent);
 }
 
 .cm-editor { background: var(--envy-background); height: 100%; }

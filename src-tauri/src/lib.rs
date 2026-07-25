@@ -422,6 +422,38 @@ fn save_template(path: String, content: String, state: State<AppState>) -> Resul
     std::fs::write(&path, content).map_err(|e| e.to_string())
 }
 
+/// How many notes are waiting in `Inbox/`.
+///
+/// Counted across every note rather than the filtered list, so the badge shows
+/// the size of the backlog and not of whatever happens to be on screen.
+#[tauri::command]
+fn inbox_count(state: State<AppState>) -> usize {
+    state
+        .store
+        .lock()
+        .unwrap()
+        .notes()
+        .iter()
+        .filter(|n| envy_core::search::is_inbox_note(n))
+        .count()
+}
+
+/// Files a fleeting note into the Index proper — a plain move out of `Inbox/`.
+/// The note's text is untouched, so nothing about having been fleeting
+/// survives in the file.
+#[tauri::command]
+fn submit_from_inbox(id: String, state: State<AppState>) -> Result<NoteDto, String> {
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    let Some(note) = store.notes().iter().find(|n| n.id() == id).cloned() else {
+        return Err(format!("no note with id {id}"));
+    };
+    store
+        .submit_from_inbox(&note)
+        .map(|n| NoteDto::from_note(&n, true))
+        .ok_or_else(|| "that note is not in the Inbox".to_string())
+}
+
 #[tauri::command]
 fn create_inbox_note(title: String, state: State<AppState>) -> Result<NoteDto, String> {
     state.mark_internal_write();
@@ -1000,6 +1032,8 @@ pub fn run() {
             read_template,
             save_template,
             create_inbox_note,
+            inbox_count,
+            submit_from_inbox,
             set_include_subfolders,
             reveal_index,
             reveal_note,

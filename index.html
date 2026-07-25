@@ -11,6 +11,9 @@
   <body>
     <div id="app">
       <div id="search-bar">
+        <!-- Left of the field, and hidden entirely at zero: an empty inbox is
+             the goal state, and a permanent "0" would nag about nothing. -->
+        <button id="inbox-badge" class="hidden" type="button"></button>
         <input
           id="search"
           type="text"
@@ -46,6 +49,14 @@
             />
             <span id="note-tags"></span>
             <span id="note-due"></span>
+            <!-- Only for a note still waiting in Inbox/. Reviewing one is a
+                 decision — file it or bin it — so both are one click away. -->
+            <span id="fleeting-actions" class="hidden">
+              <button id="fleeting-submit" type="button">Submit Note</button>
+              <button id="fleeting-delete" type="button" class="destructive">
+                Delete Note
+              </button>
+            </span>
           </div>
           <div id="editor"></div>
           <div id="empty-state">

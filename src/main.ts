@@ -776,6 +776,78 @@ function renderList() {
   )
 }
 
+// --- Inbox ------------------------------------------------------------------
+// Fleeting notes wait in Inbox/. The badge is what lets the inbox be a filter
+// rather than a mode: the notes stay out of the way, but the number doesn't,
+// so a backlog can't quietly accumulate unseen.
+
+const inboxBadgeEl = document.getElementById('inbox-badge') as HTMLButtonElement
+const fleetingActionsEl = document.getElementById('fleeting-actions')!
+
+async function refreshInboxBadge() {
+  const count = await invoke<number>('inbox_count')
+  // Strictly "something is waiting". With the inbox empty there is nowhere to
+  // go back *from*, and clearing the query is the ordinary way out of any
+  // query — so at zero the control disappears rather than sitting at "0".
+  if (count === 0) {
+    inboxBadgeEl.classList.add('hidden')
+    return
+  }
+  inboxBadgeEl.classList.remove('hidden')
+  const inInbox = inboxFragment() !== null
+  // The same control in two states rather than two controls: in the inbox
+  // it's the way out, everywhere else it's the way in. One position, one
+  // shape, and the button that got you somewhere brings you back.
+  inboxBadgeEl.textContent = inInbox ? '‹' : String(count)
+  inboxBadgeEl.classList.toggle('leaving', inInbox)
+  inboxBadgeEl.title = inInbox
+    ? 'Back out of the Inbox'
+    : `${count} fleeting note${count === 1 ? '' : 's'} waiting — click to review`
+}
+
+inboxBadgeEl.onclick = () => {
+  searchInput.value = inboxFragment() !== null ? '' : 'inbox:'
+  searchInput.focus()
+  void runSearch()
+}
+
+/// The next fleeting note waiting, excluding the one being acted on — so
+/// working through a backlog is a run of decisions rather than a series of
+/// round trips back to the list.
+function nextFleetingAfter(id: string): NoteDto | null {
+  return results.find((n) => n.isInbox && n.id !== id) ?? null
+}
+
+async function moveToNextFleeting(actedOnId: string) {
+  const next = nextFleetingAfter(actedOnId)
+  await runSearch()
+  if (next && results.some((n) => n.id === next.id)) {
+    await openNote(next.id)
+    highlighted = Math.max(0, results.findIndex((n) => n.id === next.id))
+    renderList()
+  } else {
+    closeEditor()
+  }
+}
+
+document.getElementById('fleeting-submit')!.onclick = async () => {
+  if (!openNoteId) return
+  const id = openNoteId
+  cancelPendingSave()
+  await save()
+  await invoke('submit_from_inbox', { id })
+  await moveToNextFleeting(id)
+}
+
+document.getElementById('fleeting-delete')!.onclick = async () => {
+  if (!openNoteId) return
+  const id = openNoteId
+  cancelPendingSave()
+  openNoteId = null
+  await invoke('delete_note', { id })
+  await moveToNextFleeting(id)
+}
+
 // --- Trash ------------------------------------------------------------------
 // `trash:` swaps the list over to what's been deleted, the same shape
 // `template:` and `inbox:` use. Return never acts here — restore and delete
@@ -935,6 +1007,10 @@ async function openHighlightedTemplate() {
 async function runSearch() {
   // Push the query into the editor so matches light up in the open note.
   view.dispatch({ effects: setSearchQuery.of(searchInput.value) })
+  // Before the branches: the badge's count comes from the store and its
+  // in/out state from the query, so it has to update whichever list is about
+  // to be shown.
+  void refreshInboxBadge()
 
   const template = templateFragment()
   if (template !== null) {
@@ -996,6 +1072,9 @@ async function openNote(id: string) {
   titleEl.disabled = false
   renderDueBadge(note.due)
   renderTitleBarTags(note.tags)
+  // Reviewing a fleeting note is a decision — file it or bin it — so the two
+  // actions appear only while looking at one.
+  fleetingActionsEl.classList.toggle('hidden', !note.isInbox)
   emptyEl.classList.add('hidden')
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: note.content ?? '' },
@@ -1403,6 +1482,7 @@ function closeEditor() {
   titleEl.disabled = false
   dueEl.textContent = ''
   tagsEl.replaceChildren()
+  fleetingActionsEl.classList.add('hidden')
   emptyEl.classList.remove('hidden')
   currentInterlinks = { links: [], backlinks: [], suggested: [] }
   renderInterlinks()
@@ -1740,15 +1820,20 @@ window.addEventListener('keydown', (e) => {
 // Dismiss on click-away, for people who treat Envy as a summoned scratchpad
 // rather than a window they keep open. Off by default: losing the window
 // because you glanced at a browser is startling if you didn't ask for it.
-void getCurrentWindow()
-  .onFocusChanged(({ payload: focused }) => {
+//
+// try/catch rather than .catch(): getCurrentWindow() throws *synchronously*
+// when there's no Tauri context, so there is no promise to attach to — and an
+// uncaught throw at module scope takes the whole script with it, leaving a
+// blank window with nothing in the console to explain it.
+try {
+  void getCurrentWindow().onFocusChanged(({ payload: focused }) => {
     if (!focused && settings.hideOnBlur && settingsEl.classList.contains('hidden')) {
       void getCurrentWindow().hide()
     }
   })
-  .catch(() => {
-    /* not in a Tauri window (dev in a plain browser) */
-  })
+} catch {
+  // Running outside Tauri (a plain browser during development).
+}
 
 async function boot() {
   syncTheme()
