@@ -433,6 +433,36 @@ fn list_templates(fragment: String, state: State<AppState>) -> Vec<TemplateDto> 
 
 /// A template is a plain `.md` file, so this is a plain read — deliberately
 /// not routed through the note store, which never treats one as a note.
+/// Creates a note from a template, with the tokens substituted.
+///
+/// An explicit action rather than a side effect of opening a template to look
+/// at it — the Mac makes the same split, and browsing your templates should
+/// not litter the Index with notes.
+#[tauri::command]
+fn create_note_from_template(
+    path: String,
+    title: String,
+    state: State<AppState>,
+) -> Result<NoteDto, String> {
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    let Some(template) = store.templates().into_iter().find(|t| t.path.to_string_lossy() == path)
+    else {
+        return Err("no such template".to_string());
+    };
+    let now = chrono::Local::now();
+    let pattern = state.template_date_format.lock().unwrap().clone();
+    store
+        .create_from_template(
+            &title,
+            &template,
+            &now.format(&date_pattern_to_strftime(&pattern)).to_string(),
+            &now.format("%-I:%M %p").to_string(),
+        )
+        .map(|n| NoteDto::from_note(&n, true))
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn read_template(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| e.to_string())
@@ -450,6 +480,25 @@ fn save_template(path: String, content: String, state: State<AppState>) -> Resul
 ///
 /// Counted across every note rather than the filtered list, so the badge shows
 /// the size of the backlog and not of whatever happens to be on screen.
+/// Every tag in use, for the search box's ghost-text completion.
+///
+/// Sorted by how often each is used rather than alphabetically: completing to
+/// the tag you reach for most is right far more often than completing to the
+/// one that happens to start with an early letter.
+#[tauri::command]
+fn all_tags(state: State<AppState>) -> Vec<String> {
+    let store = state.store.lock().unwrap();
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for note in store.notes() {
+        for tag in note.tags() {
+            *counts.entry(tag.clone()).or_default() += 1;
+        }
+    }
+    let mut tags: Vec<_> = counts.into_iter().collect();
+    tags.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    tags.into_iter().map(|(t, _)| t).collect()
+}
+
 #[tauri::command]
 fn inbox_count(state: State<AppState>) -> usize {
     state
@@ -1152,10 +1201,12 @@ pub fn run() {
             set_template_date_format,
             interlinks,
             list_templates,
+            create_note_from_template,
             read_template,
             save_template,
             create_inbox_note,
             inbox_count,
+            all_tags,
             submit_from_inbox,
             set_include_subfolders,
             reveal_index,

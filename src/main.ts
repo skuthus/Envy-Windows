@@ -609,6 +609,8 @@ const settings = {
   listDensity: localStorage.getItem('listDensity') ?? 'compact',
   interfaceTextSize: Number(localStorage.getItem('interfaceTextSize') ?? '1'),
   fadeFocusHighlight: boolSetting('fadeFocusHighlight', false),
+  showFooterClock: boolSetting('showFooterClock', false),
+  showFooterClockDate: boolSetting('showFooterClockDate', false),
   templateDateFormat: localStorage.getItem('templateDateFormat') ?? 'yyyy-MM-dd',
   trashMaxAgeDays: Number(localStorage.getItem('trashMaxAgeDays') ?? '0'),
 }
@@ -1210,6 +1212,25 @@ async function openTemplate(t: TemplateDto) {
   currentInterlinks = { links: [], backlinks: [], suggested: [] }
   renderInterlinks()
   renderStats()
+  templateActionsEl.classList.remove('hidden')
+  view.focus()
+}
+
+const templateActionsEl = document.getElementById('template-actions')!
+
+document.getElementById('template-create')!.onclick = async () => {
+  if (!openTemplatePath) return
+  const name = templateResults.find((t) => t.id === openTemplatePath)?.name ?? ''
+  const created = await invoke<NoteDto>('create_note_from_template', {
+    path: openTemplatePath,
+    title: name,
+  })
+  // Leaves template-browsing mode: you asked for a note, so show the note.
+  searchInput.value = ''
+  await runSearch()
+  await openNote(created.id)
+  selectSingle(Math.max(0, results.findIndex((n) => n.id === created.id)))
+  renderList()
   view.focus()
 }
 
@@ -1255,6 +1276,9 @@ async function runSearch() {
   trashResults = []
   templateResults = []
   trashPreviewEl.classList.add('hidden')
+  void invoke<string[]>('all_tags').then((t) => {
+    knownTags = t
+  })
   results = await invoke<NoteDto[]>('search', { query: searchInput.value })
   // Fleeting notes can be kept out of the way until you go looking for them.
   // Never hidden when the query is already about the inbox, though — asking
@@ -1291,6 +1315,7 @@ async function openNote(id: string) {
   // Reviewing a fleeting note is a decision — file it or bin it — so the two
   // actions appear only while looking at one.
   fleetingActionsEl.classList.toggle('hidden', !note.isInbox)
+  templateActionsEl.classList.add('hidden')
   emptyEl.classList.add('hidden')
   view.dispatch({
     changes: { from: 0, to: view.state.doc.length, insert: note.content ?? '' },
@@ -1718,7 +1743,38 @@ async function captureToInbox(title: string) {
   view.focus()
 }
 
-searchInput.addEventListener('input', () => void runSearch())
+// --- Tag ghost-text ----------------------------------------------------------
+// Typing "tag:tec" shows the rest of "technology" ahead of the caret; Tab or
+// Right accepts it. Ghost text rather than a dropdown: a list would cover the
+// note list, which is the thing you're narrowing.
+
+const searchGhostEl = document.getElementById('search-ghost')!
+let knownTags: string[] = []
+
+function ghostCompletion(): string | null {
+  const value = searchInput.value
+  // Only completes the token being typed, and only at the very end — a
+  // completion offered mid-string would insert where the caret isn't.
+  if (searchInput.selectionStart !== value.length) return null
+  const m = value.match(/(^|\s)-?tag:([A-Za-z0-9_-]*)$/)
+  if (!m) return null
+  const fragment = m[2].toLowerCase()
+  if (!fragment) return null
+  const hit = knownTags.find((t) => t.startsWith(fragment) && t !== fragment)
+  return hit ? hit.slice(fragment.length) : null
+}
+
+function renderGhost() {
+  const rest = ghostCompletion()
+  searchGhostEl.textContent = rest ? searchInput.value + rest : ''
+  searchGhostEl.classList.toggle('hidden', !rest)
+}
+
+searchInput.addEventListener('input', () => {
+  renderGhost()
+  void runSearch()
+})
+searchInput.addEventListener('blur', () => searchGhostEl.classList.add('hidden'))
 
 /// Whichever list is on screen — notes, or templates while `template:` is
 /// typed. Arrowing has to move through what's actually shown.
@@ -1751,6 +1807,14 @@ searchInput.addEventListener('keydown', (e) => {
     void openOrCreate()
   } else if (e.key === 'Escape') {
     searchInput.value = ''
+    void runSearch()
+  } else if ((e.key === 'Tab' || e.key === 'ArrowRight') && ghostCompletion()) {
+    // Accepts the ghost. Right-arrow as well as Tab because the caret is
+    // already at the end, so "move right" and "take the suggestion" are the
+    // same gesture there.
+    e.preventDefault()
+    searchInput.value += ghostCompletion()
+    renderGhost()
     void runSearch()
   } else if (e.key === 'Backspace' && e.altKey) {
     // Alt+Backspace clears the whole box — the Mac's ⌥⌫. Faster than
@@ -1855,6 +1919,7 @@ function closeEditor() {
   dueEl.textContent = ''
   tagsEl.replaceChildren()
   fleetingActionsEl.classList.add('hidden')
+  templateActionsEl.classList.add('hidden')
   emptyEl.classList.remove('hidden')
   currentInterlinks = { links: [], backlinks: [], suggested: [] }
   renderInterlinks()
@@ -1924,7 +1989,12 @@ window.addEventListener('resize', () => view.requestMeasure())
 // than being handed results, so a reload can't clobber whatever has since been
 // typed into the search box.
 void listen('index-changed', async () => {
-  await runSearch()
+  setLoading(true)
+  try {
+    await runSearch()
+  } finally {
+    setLoading(false)
+  }
   // The "always current" half of transclusion: a source note edited elsewhere
   // should update where it's embedded, not keep showing what it looked like
   // when the host note was opened.
@@ -1993,6 +2063,45 @@ function syncTheme() {
   document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
 }
 darkQuery.addEventListener('change', syncTheme)
+
+// --- Footer clock and loading indicator --------------------------------------
+
+const clockEl = document.getElementById('footer-clock')!
+const loadingEl = document.getElementById('loading-indicator')!
+
+/// Ticks on a timer rather than being computed once — a clock rendered from a
+/// value read at startup freezes at whatever time the app happened to open.
+let clockTimer: number | undefined
+function startClockTick() {
+  const tick = () => {
+    if (!settings.showFooterClock) {
+      clockEl.classList.add('hidden')
+      return
+    }
+    const now = new Date()
+    const time = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    clockEl.textContent = settings.showFooterClockDate
+      ? `${now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${time}`
+      : time
+    clockEl.classList.remove('hidden')
+  }
+  tick()
+  window.clearInterval(clockTimer)
+  // Every 30s, matching the Mac's own cadence — a minute-resolution clock
+  // doesn't need per-second work, but a 60s tick can show a stale minute for
+  // almost a whole one.
+  clockTimer = window.setInterval(tick, 30_000)
+}
+
+/// Shown while a rescan is in flight. It lives in the footer rather than above
+/// the list, so it can't shift the list's layout every time it appears — a
+/// scan over several thousand notes is common enough (external sync, a bulk
+/// import) that a moving list would be a constant distraction.
+let loadingDepth = 0
+function setLoading(active: boolean) {
+  loadingDepth = Math.max(0, loadingDepth + (active ? 1 : -1))
+  loadingEl.classList.toggle('hidden', loadingDepth === 0)
+}
 
 // --- Reference sheets --------------------------------------------------------
 // Markup, Shortcuts, Emoji and About. On the Mac these are separate windows off
@@ -2072,6 +2181,8 @@ function openSettings() {
   dropdown('setting-density').value = settings.listDensity
   dropdown('setting-text-size').value = String(settings.interfaceTextSize)
   checkbox('setting-fade-focus').checked = settings.fadeFocusHighlight
+  checkbox('setting-clock').checked = settings.showFooterClock
+  checkbox('setting-clock-date').checked = settings.showFooterClockDate
   recording = null
   renderShortcutSettings()
   dropdown('setting-trash-age').value = String(settings.trashMaxAgeDays)
@@ -2181,6 +2292,8 @@ dropdown('setting-text-size').onchange = (e) => {
 bindToggle('setting-fade-focus', 'fadeFocusHighlight', () =>
   document.body.classList.toggle('fade-focus', settings.fadeFocusHighlight),
 )
+bindToggle('setting-clock', 'showFooterClock', startClockTick)
+bindToggle('setting-clock-date', 'showFooterClockDate', startClockTick)
 
 dropdown('setting-link-preview').onchange = (e) => {
   settings.linkPreview = (e.target as HTMLSelectElement).value
@@ -2397,6 +2510,7 @@ async function boot() {
   document.body.classList.toggle('fade-focus', settings.fadeFocusHighlight)
   applyZoom()
   applyPlainTextMode()
+  startClockTick()
   applyLayout()
   renderSortHeader()
   // The backend keeps the tray pin only in memory, so hand it back the value
@@ -2452,6 +2566,10 @@ async function boot() {
   toggleMultiSelect,
   extendSelection,
   fullSelection,
+  ghostCompletion,
+  setTagsForTest: (t: string[]) => {
+    knownTags = t
+  },
   setResultsForTest: (r: NoteDto[]) => {
     results = r
     multiSelected.clear()

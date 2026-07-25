@@ -70,6 +70,24 @@ html, body {
   background: var(--envy-title-bar-background);
   border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 40%, transparent);
 }
+#search-wrap { position: relative; flex: 1; display: flex; }
+/* Behind the field, aligned to the same text metrics, showing the whole
+   completed value — the typed part is invisible against the real text, so only
+   the remainder reads as a suggestion. */
+#search-ghost {
+  position: absolute;
+  inset: 0;
+  padding: 6px 10px;
+  font-size: calc(15px * var(--envy-ui-scale));
+  line-height: normal;
+  color: var(--envy-marker);
+  pointer-events: none;
+  white-space: pre;
+  overflow: hidden;
+  border: 1px solid transparent;
+}
+#search-ghost.hidden { display: none; }
+
 #search {
   flex: 1;
   font: inherit;
@@ -421,6 +439,24 @@ body.popover {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
 }
+#footer-clock { font-variant-numeric: tabular-nums; }
+#footer-clock.hidden, #loading-indicator.hidden { display: none; }
+#loading-indicator { opacity: 0.8; }
+
+#template-actions { display: flex; gap: 6px; flex: none; }
+#template-actions.hidden { display: none; }
+#template-actions button {
+  font: inherit;
+  font-size: 11px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: transparent;
+  color: var(--envy-text);
+  cursor: default;
+  white-space: nowrap;
+}
+#template-actions button:hover { background: color-mix(in srgb, var(--envy-marker) 20%, transparent); }
 
 #interlinks-toggle {
   font: inherit;

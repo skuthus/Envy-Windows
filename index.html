@@ -14,13 +14,18 @@
         <!-- Left of the field, and hidden entirely at zero: an empty inbox is
              the goal state, and a permanent "0" would nag about nothing. -->
         <button id="inbox-badge" class="hidden" type="button"></button>
-        <input
-          id="search"
-          type="text"
-          placeholder="Search or Create Note"
-          autocomplete="off"
-          spellcheck="false"
-        />
+        <div id="search-wrap">
+          <!-- Sits behind the field, showing the rest of a matching tag as
+               ghost text. Not inside the input, which can't hold markup. -->
+          <div id="search-ghost" aria-hidden="true"></div>
+          <input
+            id="search"
+            type="text"
+            placeholder="Search or Create Note"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
       </div>
       <div id="panes">
         <div id="list-pane">
@@ -53,6 +58,11 @@
                 Delete Note
               </button>
             </span>
+            <!-- Creating a note from a template is an explicit button, not a
+                 side effect of opening one to look at it. -->
+            <span id="template-actions" class="hidden">
+              <button id="template-create" type="button">Create Note from Template</button>
+            </span>
           </div>
           <div id="editor"></div>
           <div id="empty-state">
@@ -76,6 +86,8 @@
           <div id="interlinks" class="hidden"></div>
           <div id="footer">
             <button id="interlinks-toggle" type="button" class="hidden"></button>
+            <span id="loading-indicator" class="hidden">Loading notes…</span>
+            <span id="footer-clock" class="hidden"></span>
             <span id="stats"></span>
           </div>
         </div>
@@ -232,6 +244,18 @@
             <label>
               <input type="checkbox" id="setting-show-interlinks" />
               Show interlinks in footer
+            </label>
+          </section>
+
+          <section>
+            <h3>Footer clock</h3>
+            <label>
+              <input type="checkbox" id="setting-clock" />
+              Show clock in footer
+            </label>
+            <label>
+              <input type="checkbox" id="setting-clock-date" />
+              Show date with clock
             </label>
           </section>
 
