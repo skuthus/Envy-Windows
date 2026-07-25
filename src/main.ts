@@ -945,7 +945,22 @@ function buildRow(note: NoteDto, i: number): HTMLElement {
         title.append(badge)
       }
 
-      row.append(title)
+      // Title and preview sit together on one line, the preview following the
+      // title rather than wrapping under it — the Mac's row is a single HStack.
+      const main = document.createElement('div')
+      main.className = 'row-main'
+      main.append(title)
+
+      // Empty previews are skipped rather than rendered blank, matching the
+      // Mac's `showPreview && !note.preview.isEmpty`.
+      if (settings.showNotePreview && note.preview) {
+        const meta = document.createElement('span')
+        meta.className = 'row-meta'
+        meta.textContent = note.preview
+        main.append(meta)
+      }
+
+      row.append(main)
 
       // One trailing slot, not two. It shows whichever date the list is sorted
       // by — a traditional sortable list shows the column you sorted on, the
@@ -954,8 +969,8 @@ function buildRow(note: NoteDto, i: number): HTMLElement {
       // falls back to the modified date.
       //
       // showDateModified defaults to true on the Mac and showNotePreview to
-      // false, so the default row is one dense line — title and date — not a
-      // two-line card. Preview is opt-in.
+      // false, so the default row is title and date. Preview is opt-in, and
+      // joins that same line rather than adding a second one.
       if (settings.showDateModified) {
         const date = document.createElement('span')
         date.className = 'row-date'
@@ -974,13 +989,6 @@ function buildRow(note: NoteDto, i: number): HTMLElement {
           date.textContent = formatModified(note.modifiedMs)
         }
         row.append(date)
-      }
-
-      if (settings.showNotePreview) {
-        const meta = document.createElement('div')
-        meta.className = 'row-meta'
-        meta.textContent = note.preview
-        row.append(meta)
       }
 
       row.onclick = (e) => {

@@ -147,14 +147,21 @@ html, body {
    the note. */
 
 /* Chrome scales with the Interface Text Size setting. The editor is excluded —
-   it has its own zoom. */
+   it has its own zoom.
+
+   These are the only place a row's font size is set. They used to be declared
+   here *and* again, unscaled, in the row rules further down; equal specificity
+   meant the later fixed values won and the setting did nothing to the list at
+   all. The sizes are the Mac's: NoteRow multiplies 13 for the title and 11 for
+   the preview and date by interfaceFontScale. */
 #search-bar,
 #list-pane,
 #note-title-bar,
 #footer,
 #interlinks { font-size: calc(1rem * var(--envy-ui-scale)); }
 .row-title { font-size: calc(13px * var(--envy-ui-scale)); }
-.row-date { font-size: calc(11px * var(--envy-ui-scale)); }
+.row-date,
+.row-meta { font-size: calc(11px * var(--envy-ui-scale)); }
 #search { font-size: calc(15px * var(--envy-ui-scale)); }
 
 /* --- Focus highlight -------------------------------------------------------
@@ -243,7 +250,7 @@ body.fade-focus #editor-pane:focus-within {
   gap: 8px;
 }
 
-.sort-button[data-field='name'], .row-title { grid-column: 1; }
+.sort-button[data-field='name'], .row-main { grid-column: 1; }
 .sort-group, .row-date { grid-column: 2; }
 
 /* Both sort buttons share the value column, since either one can be the field
@@ -265,7 +272,10 @@ body.fade-focus #editor-pane:focus-within {
   align-items: center;
   gap: 3px;
   font: inherit;
-  font-size: 11px;
+  /* Scaled like the rows beneath it — the Mac's sortHeaderButton is
+     `11 * interfaceFontScale`, and a fixed header above scaled rows reads as a
+     mistake. */
+  font-size: calc(11px * var(--envy-ui-scale));
   font-weight: 600;
   padding: 0;
   border: none;
@@ -275,7 +285,8 @@ body.fade-focus #editor-pane:focus-within {
 }
 .sort-button.active { color: var(--envy-text); }
 .sort-button:hover { color: var(--envy-text); }
-.sort-arrow { font-size: 8px; }
+/* 9px, matching the Mac's chevron, and scaled with everything else. */
+.sort-arrow { font-size: calc(9px * var(--envy-ui-scale)); }
 
 #divider {
   flex: none;
@@ -315,8 +326,24 @@ body.fade-focus #editor-pane:focus-within {
 .row.highlighted .row-date:not(.envy-due-overdue):not(.envy-due-soon),
 .row.highlighted .row-meta,
 .row.highlighted .ai-badge { color: inherit; opacity: 0.8; }
+/* Title and preview share the first column, side by side on one line — the
+   Mac's row is an HStack, so the preview follows the title rather than sitting
+   under it.
+
+   The title carries `layoutPriority(1)` there, meaning it keeps its full width
+   and the preview is what gives way. `flex: 0 1 auto` on the title against
+   `flex: 1 1 0` on the preview reproduces that: a zero basis means the preview
+   only ever gets space left over once the title has taken what it needs, so it
+   is the one that truncates — never the other way around. */
+.row-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
 .row-title {
-  font-size: 13px;
+  flex: 0 1 auto;
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -326,7 +353,6 @@ body.fade-focus #editor-pane:focus-within {
    column. Clipped with an ellipsis for the narrow layout, where the cap above
    can make the track shorter than the text. */
 .row-date {
-  font-size: 11px;
   color: var(--envy-blockquote);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -334,8 +360,8 @@ body.fade-focus #editor-pane:focus-within {
   text-overflow: ellipsis;
 }
 .row-meta {
-  grid-column: 1 / -1;
-  font-size: 12px;
+  flex: 1 1 0;
+  min-width: 0;
   color: var(--envy-blockquote);
   white-space: nowrap;
   overflow: hidden;
