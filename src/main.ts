@@ -23,6 +23,10 @@ interface NoteDto {
 const searchInput = document.getElementById('search') as HTMLInputElement
 const panesEl = document.getElementById('panes')!
 const dividerEl = document.getElementById('divider')!
+/// The split sizes the *pane* (header + scrolling list), not the list itself —
+/// the list is `flex: 1` inside it. Sizing the inner element instead leaves
+/// the pane fixed at its CSS height, which reads as a divider that won't drag.
+const listPaneEl = document.getElementById('list-pane')!
 const listEl = document.getElementById('list')!
 const listHeaderEl = document.getElementById('list-header')!
 const countEl = document.getElementById('count')!
@@ -151,12 +155,12 @@ function applyLayout() {
   panesEl.className = layoutMode
   if (layoutMode === 'vertical') {
     const fraction = storedNumber('verticalSplitFraction', DEFAULT_TOP_FRACTION)
-    listEl.style.height = `${(fraction * 100).toFixed(3)}%`
-    listEl.style.width = ''
+    listPaneEl.style.height = `${(fraction * 100).toFixed(3)}%`
+    listPaneEl.style.width = ''
   } else {
     const width = storedNumber('horizontalListWidth', DEFAULT_LIST_WIDTH)
-    listEl.style.width = `${width}px`
-    listEl.style.height = ''
+    listPaneEl.style.width = `${width}px`
+    listPaneEl.style.height = ''
   }
   localStorage.setItem('layoutMode', layoutMode)
   // The editor's viewport just changed shape, and the styler decorates only
