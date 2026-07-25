@@ -629,7 +629,13 @@ function renderList() {
         dot.title = 'Fleeting note'
         title.prepend(dot)
       }
-      if (pinnedIds.has(note.id)) {
+      if (note.id === trayPinnedId) {
+        const pin = document.createElement('span')
+        pin.className = 'pin-mark'
+        pin.textContent = '📍'
+        pin.title = 'Pinned to the tray — clicking the tray icon opens this'
+        title.prepend(pin)
+      } else if (pinnedIds.has(note.id)) {
         const pin = document.createElement('span')
         pin.className = 'pin-mark'
         pin.textContent = '📌'
@@ -821,6 +827,21 @@ function applyPinning(notes: NoteDto[]): NoteDto[] {
   const pinned = notes.filter((n) => pinnedIds.has(n.id))
   const rest = notes.filter((n) => !pinnedIds.has(n.id))
   return [...pinned, ...rest]
+}
+
+/// The one note pinned to the tray, if any. Distinct from list pinning: that
+/// arranges the list, this substitutes what a tray click does. Only one note
+/// can hold it, so setting it displaces whatever held it before.
+let trayPinnedId: string | null = localStorage.getItem('trayPinnedId')
+
+async function toggleTrayPin() {
+  const target = results[highlighted]
+  if (!target) return
+  trayPinnedId = trayPinnedId === target.id ? null : target.id
+  if (trayPinnedId) localStorage.setItem('trayPinnedId', trayPinnedId)
+  else localStorage.removeItem('trayPinnedId')
+  await invoke('set_pinned_note', { id: trayPinnedId })
+  renderList()
 }
 
 function togglePin() {
@@ -1073,10 +1094,23 @@ window.addEventListener('keydown', (e) => {
   if (!e.ctrlKey) return
   const key = e.key.toLowerCase()
 
-  // Ctrl+Alt+P pins or unpins — the Windows spelling of ⌥⌘P.
-  if (e.altKey && key === 'p') {
+  // Ctrl+Alt+P pins to the top of the list — the Windows spelling of ⌥⌘P.
+  if (e.altKey && !e.shiftKey && key === 'p') {
     e.preventDefault()
     togglePin()
+    return
+  }
+
+  // Ctrl+Alt+T pins the highlighted note to the tray.
+  //
+  // Deliberately not Ctrl+Alt+Shift+P, which would be the tidier pairing:
+  // that chord is registered as a *global* shortcut for unpinning (matching
+  // the Mac's ⌥⌘⇧P), and a global shortcut fires even while Envy is focused.
+  // Binding both to one chord would have them fight, pinning and unpinning in
+  // the same keystroke.
+  if (e.altKey && key === 't') {
+    e.preventDefault()
+    void toggleTrayPin()
     return
   }
 
@@ -1148,6 +1182,23 @@ void listen('index-changed', async () => {
 void listen('focus-search', () => {
   searchInput.focus()
   searchInput.select()
+})
+
+// The popover's "Open" button, and anything else that wants the app brought
+// forward on a particular note.
+void listen<string>('open-note', async (e) => {
+  await openNote(e.payload)
+  highlighted = Math.max(0, results.findIndex((n) => n.id === e.payload))
+  renderList()
+})
+
+// The tray pin can be cleared from the popover or the global unpin shortcut,
+// so the marker in the list has to follow rather than assume.
+void listen('pinned-note-changed', async () => {
+  trayPinnedId = await invoke<string | null>('pinned_note_id')
+  if (trayPinnedId) localStorage.setItem('trayPinnedId', trayPinnedId)
+  else localStorage.removeItem('trayPinnedId')
+  renderList()
 })
 
 // Envious ships a light and a dark face. Following the OS is the default —
@@ -1248,6 +1299,9 @@ async function boot() {
   syncTheme()
   applyLayout()
   renderSortHeader()
+  // The backend keeps the tray pin only in memory, so hand it back the value
+  // that survived the restart.
+  if (trayPinnedId) await invoke('set_pinned_note', { id: trayPinnedId })
   const dir = await invoke<string>('index_directory')
   searchInput.placeholder = `Search ${dir}…`
   el('settings-index-path').textContent = dir

@@ -65,6 +65,13 @@ impl NoteDto {
 
 pub struct AppState {
     store: Mutex<NoteStore>,
+    /// The note pinned to the tray, if any.
+    ///
+    /// Held here because the tray click handler runs in Rust and has to decide
+    /// what to open before any window exists. Durable storage stays in the
+    /// frontend alongside the list pins — this is a cache the frontend fills
+    /// on boot, not a second source of truth.
+    pinned_note: Mutex<Option<String>>,
     /// Envy's own writes trip the watcher exactly like an external edit would.
     /// Suppressing a brief window after each one stops a redundant rescan —
     /// and, more importantly, stops a reload landing on top of text the user
@@ -355,27 +362,52 @@ fn setup_global_hotkey(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error:
         Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState,
     };
 
-    let summon = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Enter);
+    const CTRL_ALT: Modifiers = Modifiers::CONTROL.union(Modifiers::ALT);
+
+    let summon = Shortcut::new(Some(CTRL_ALT), Code::Enter);
+    let show_pinned = Shortcut::new(Some(CTRL_ALT), Code::ArrowDown);
+    let unpin = Shortcut::new(
+        Some(CTRL_ALT.union(Modifiers::SHIFT)),
+        Code::KeyP,
+    );
+
     let handle = app.clone();
     app.plugin(
         tauri_plugin_global_shortcut::Builder::new()
             .with_handler(move |_app, shortcut, event| {
-                // Fire on press only; without this the chord toggles twice per
-                // use and lands back where it started.
+                // Fire on press only; without this each chord toggles twice
+                // per use and lands back where it started.
                 if event.state() != ShortcutState::Pressed {
                     return;
                 }
-                if shortcut.matches(Modifiers::CONTROL | Modifiers::ALT, Code::Enter) {
+                if shortcut.matches(CTRL_ALT, Code::Enter) {
                     if let Some(window) = handle.get_webview_window("main") {
                         toggle_window(&window);
                     }
+                } else if shortcut.matches(CTRL_ALT, Code::ArrowDown) {
+                    toggle_pinned_window(&handle);
+                } else if shortcut.matches(CTRL_ALT.union(Modifiers::SHIFT), Code::KeyP) {
+                    if let Some(state) = handle.try_state::<AppState>() {
+                        *state.pinned_note.lock().unwrap() = None;
+                    }
+                    if let Some(w) = handle.get_webview_window(PINNED_WINDOW) {
+                        let _ = w.hide();
+                    }
+                    let _ = handle.emit("pinned-note-changed", ());
                 }
             })
             .build(),
     )?;
 
-    if let Err(e) = app.global_shortcut().register(summon) {
-        eprintln!("could not register the summon hotkey (Ctrl+Alt+Enter): {e}");
+    // Registered individually so one clash doesn't cost the others.
+    for (shortcut, name) in [
+        (summon, "Ctrl+Alt+Enter (summon)"),
+        (show_pinned, "Ctrl+Alt+Down (pinned note)"),
+        (unpin, "Ctrl+Alt+Shift+P (unpin)"),
+    ] {
+        if let Err(e) = app.global_shortcut().register(shortcut) {
+            eprintln!("could not register {name}: {e}");
+        }
     }
     Ok(())
 }
@@ -413,7 +445,16 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 ..
             } = event
             {
-                if let Some(w) = tray.app_handle().get_webview_window("main") {
+                let app = tray.app_handle();
+                // With a note pinned, a click opens *it* rather than summoning
+                // the app — that substitution is the whole feature. Without
+                // one, the click falls back to showing Envy.
+                let pinned = app
+                    .try_state::<AppState>()
+                    .and_then(|s| s.pinned_note.lock().unwrap().clone());
+                if pinned.is_some() {
+                    toggle_pinned_window(app);
+                } else if let Some(w) = app.get_webview_window("main") {
                     toggle_window(&w);
                 }
             }
@@ -439,6 +480,76 @@ fn toggle_window(window: &WebviewWindow) {
         // The search box is where a summon should land — the point of
         // summoning is to type.
         let _ = window.emit("focus-search", ());
+    }
+}
+
+const PINNED_WINDOW: &str = "pinned";
+
+#[tauri::command]
+fn pinned_note_id(state: State<AppState>) -> Option<String> {
+    state.pinned_note.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_pinned_note(id: Option<String>, app: tauri::AppHandle, state: State<AppState>) {
+    *state.pinned_note.lock().unwrap() = id.clone();
+    if id.is_none() {
+        if let Some(w) = app.get_webview_window(PINNED_WINDOW) {
+            let _ = w.hide();
+        }
+    }
+    // Both windows care: the popover reloads, and the app repaints its pin
+    // marks.
+    let _ = app.emit("pinned-note-changed", ());
+}
+
+/// Brings the main window forward on a specific note — the popover's "Open"
+/// button, which is the bridge from glancing to actually working on it.
+#[tauri::command]
+fn open_in_main_window(id: String, app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+        let _ = w.emit("open-note", id);
+    }
+}
+
+/// Creates the popover on first use rather than at launch. It is a window most
+/// people will never open, and building it eagerly would cost every user a
+/// second webview for a feature they may not use.
+fn show_pinned_window(app: &tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window(PINNED_WINDOW) {
+        let _ = w.show();
+        let _ = w.set_focus();
+        let _ = w.emit("pinned-note-changed", ());
+        return;
+    }
+    let built = tauri::WebviewWindowBuilder::new(
+        app,
+        PINNED_WINDOW,
+        tauri::WebviewUrl::App("pinned.html".into()),
+    )
+    .title("Pinned note")
+    .inner_size(420.0, 460.0)
+    .resizable(true)
+    // Undecorated and always-on-top so it reads as a panel hanging off the
+    // tray rather than a second application window.
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .build();
+    if let Err(e) = built {
+        eprintln!("could not open the pinned-note window: {e}");
+    }
+}
+
+fn toggle_pinned_window(app: &tauri::AppHandle) {
+    match app.get_webview_window(PINNED_WINDOW) {
+        Some(w) if w.is_visible().unwrap_or(false) => {
+            let _ = w.hide();
+        }
+        _ => show_pinned_window(app),
     }
 }
 
@@ -503,6 +614,7 @@ pub fn run() {
 
             app.manage(AppState {
                 store: Mutex::new(store),
+                pinned_note: Mutex::new(None),
                 suppress_until,
                 _watcher: Mutex::new(watcher),
             });
@@ -531,6 +643,9 @@ pub fn run() {
             reveal_index,
             autostart_enabled,
             set_autostart,
+            pinned_note_id,
+            set_pinned_note,
+            open_in_main_window,
             reload,
         ])
         .run(tauri::generate_context!())

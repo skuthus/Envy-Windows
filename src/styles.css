@@ -276,6 +276,56 @@ html, body {
    second scrolling container here produces two nested scrollbars. */
 #editor { flex: 1; min-height: 0; overflow: hidden; }
 
+/* --- Pinned-note popover ----------------------------------------------------
+   Its own window, undecorated and always on top, so it reads as a panel
+   hanging off the tray rather than a second application window. The border is
+   doing the job the missing title bar would otherwise do — marking where the
+   window ends. */
+
+body.popover {
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 70%, transparent);
+  border-radius: 8px;
+  overflow: hidden;
+}
+#pinned-app { display: flex; flex-direction: column; height: 100%; }
+
+#pinned-title-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--envy-title-bar-background);
+  border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 30%, transparent);
+  /* Undecorated windows have nothing to drag, so the bar becomes the handle. */
+  -webkit-app-region: drag;
+}
+#pinned-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#pinned-title-bar button {
+  -webkit-app-region: no-drag;
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 5px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: transparent;
+  color: var(--envy-blockquote);
+  cursor: default;
+}
+#pinned-title-bar button:hover {
+  color: var(--envy-text);
+  background: color-mix(in srgb, var(--envy-marker) 20%, transparent);
+}
+
+#pinned-editor { flex: 1; min-height: 0; overflow: hidden; }
+
 /* --- Footer and interlinks --------------------------------------------------
    The panel sits directly above the footer bar so expanding grows it upward
    into the editor, rather than pushing the footer down and shifting the whole

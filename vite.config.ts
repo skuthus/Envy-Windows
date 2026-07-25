@@ -5,6 +5,16 @@ const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
+  build: {
+    rollupOptions: {
+      // Two entry points: the app, and the small always-on-top popover the
+      // tray opens for a pinned note.
+      input: {
+        main: "index.html",
+        pinned: "pinned.html",
+      },
+    },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

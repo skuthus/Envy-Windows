@@ -79,7 +79,8 @@ fn rounded_rect(size: f32, radius: f32) -> tiny_skia::Path {
     // Circular corner arcs approximated with cubics — the Swift uses a plain
     // circular arc too, not Apple's continuous curve, so it reads a touch
     // tighter than a system-drawn one.
-    let k = radius * 0.552_284_75;
+    // The standard circle-to-cubic constant, 4/3·(√2−1).
+    let k = radius * 0.552_284_8;
     let (a, b) = (radius, size - radius);
     pb.move_to(a, 0.0);
     pb.line_to(b, 0.0);

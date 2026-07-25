@@ -64,7 +64,10 @@ with a welcome note.
 | Keys | Action |
 |---|---|
 | `Ctrl+Alt+Enter` | Show or hide Envy — works from any app |
-| `Ctrl+Alt+P` | Pin or unpin the highlighted note |
+| `Ctrl+Alt+Down` | Show or hide the pinned note — works from any app |
+| `Ctrl+Alt+Shift+P` | Unpin the note pinned to the tray — works from any app |
+| `Ctrl+Alt+P` | Pin or unpin the highlighted note to the top of the list |
+| `Ctrl+Alt+T` | Pin the highlighted note to the tray |
 | `Ctrl+L` | Jump to the search box |
 | `↑` / `↓` | Move the highlighted note |
 | `Return` | Open the top match, or create a note from what you typed |
