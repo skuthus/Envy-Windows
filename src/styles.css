@@ -288,13 +288,36 @@ body.fade-focus #editor-pane:focus-within {
 /* 9px, matching the Mac's chevron, and scaled with everything else. */
 .sort-arrow { font-size: calc(9px * var(--envy-ui-scale)); }
 
+/* The only thing separating the list from the editor, since both panes share
+   the window background — as they do on the Mac, where the separation comes
+   from NSSplitView's own thin divider rather than a change of colour.
+
+   Two things were wrong with the previous version. It transitioned the
+   `background` *shorthand*, which left the computed value settled at a fully
+   transparent colour — the line was not faint, it was not drawn at all. And the
+   colour it never reached was `--envy-marker` at 40%, about a tenth of a percent
+   of white over a near-black background, which would have been close to
+   invisible even had it painted. It now uses the marker at full strength, which
+   is the same hairline weight used elsewhere in the chrome, and transitions only
+   the colour property that actually changes on hover. */
 #divider {
   flex: none;
-  background: color-mix(in srgb, var(--envy-marker) 40%, transparent);
-  transition: background 120ms ease;
+  /* content-box, against the global border-box, and load-bearing.
+     The padding widens the grab area to five pixels while `height` stays the
+     one pixel that actually gets painted — `background-clip: content-box` below
+     draws the content box alone, so the padding stays invisible but grabbable.
+     Under border-box the padding is subtracted *from* the height instead:
+     1px − 4px of padding clamps the content box to zero, leaving nothing to
+     paint. The divider was not faint, it was never drawn, in either
+     orientation. */
+  box-sizing: content-box;
+  background-color: var(--envy-marker);
+  transition: background-color 120ms ease;
 }
+/* background-color, not the shorthand — the shorthand is what the transition
+   above stumbled over. */
 #divider:hover,
-#divider.dragging { background: var(--envy-link); }
+#divider.dragging { background-color: var(--envy-link); }
 #panes.vertical > #divider { height: 1px; cursor: row-resize; padding: 2px 0; background-clip: content-box; }
 #panes.horizontal > #divider { width: 1px; cursor: col-resize; padding: 0 2px; background-clip: content-box; }
 #divider:focus-visible { outline: 2px solid var(--envy-link); outline-offset: 1px; }
