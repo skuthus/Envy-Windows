@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window and the pinned-note popover. The popover needs its own entry: capabilities are per-window, so without being named here it cannot even hide itself, and calls like getCurrentWindow().hide() are denied at runtime rather than failing to compile.",
+  "description": "Capability for the main window and the pinned-note popover. Both are named here because capabilities are per-window: a window left out cannot even hide itself, and the calls are denied at runtime rather than failing to compile. Note that `core:default` is not as broad as it sounds — its window half grants only the read-only calls (is-visible, inner-size, title and so on) plus internal-toggle-maximize. Anything that actually moves or hides a window has to be asked for by name, which is why allow-hide is listed separately below despite hide() looking like the most ordinary thing a window could do.",
   "windows": ["main", "pinned"],
   "permissions": [
     "core:default",
-    "opener:default"
+    "opener:default",
+    "core:window:allow-hide"
   ]
 }

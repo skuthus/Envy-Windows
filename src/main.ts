@@ -4,7 +4,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open as openFolderPicker } from '@tauri-apps/plugin-dialog'
-import { getCurrentWindow } from '@tauri-apps/api/window'
+import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window'
 import {
   embedHost,
   envyStyler,
@@ -607,7 +607,13 @@ const settings = {
   showDuePill: boolSetting('showDuePill', true),
   requireModifierForLinkClick: boolSetting('requireModifierForLinkClick', true),
   showBacklinks: boolSetting('showBacklinks', true),
-  hideOnBlur: boolSetting('hideOnFocusLoss', false),
+  // Named for its storage key, not for the DOM event behind it. `bindToggle`
+  // writes each setting back under its own property name, so a property called
+  // something other than the key it was read from saves to one place and loads
+  // from another — which is exactly what happened here: this read
+  // "hideOnFocusLoss" and saved "hideOnBlur", so the choice survived until the
+  // next launch and no further. The key matches the Mac's own preference.
+  hideOnFocusLoss: boolSetting('hideOnFocusLoss', false),
   linkPreview: localStorage.getItem('linkPreviewTrigger') ?? 'altClick',
   listDensity: localStorage.getItem('listDensity') ?? 'compact',
   interfaceTextSize: Number(localStorage.getItem('interfaceTextSize') ?? '1'),
@@ -2336,7 +2342,7 @@ function openSettings() {
   checkbox('setting-show-due-pill').checked = settings.showDuePill
   checkbox('setting-require-modifier').checked = settings.requireModifierForLinkClick
   checkbox('setting-show-interlinks').checked = settings.showBacklinks
-  checkbox('setting-hide-on-blur').checked = settings.hideOnBlur
+  checkbox('setting-hide-on-blur').checked = settings.hideOnFocusLoss
   dropdown('setting-date-style').value = settings.dateDisplayStyle
   dropdown('setting-link-preview').value = settings.linkPreview
   dropdown('setting-density').value = settings.listDensity
@@ -2431,7 +2437,7 @@ bindToggle('setting-show-due-pill', 'showDuePill', () => {
 })
 bindToggle('setting-require-modifier', 'requireModifierForLinkClick')
 bindToggle('setting-show-interlinks', 'showBacklinks', renderInterlinks)
-bindToggle('setting-hide-on-blur', 'hideOnBlur')
+bindToggle('setting-hide-on-blur', 'hideOnFocusLoss')
 
 dropdown('setting-date-style').onchange = (e) => {
   settings.dateDisplayStyle = (e.target as HTMLSelectElement).value
@@ -2676,10 +2682,43 @@ window.addEventListener('keydown', (e) => {
 // when there's no Tauri context, so there is no promise to attach to — and an
 // uncaught throw at module scope takes the whole script with it, leaving a
 // blank window with nothing in the console to explain it.
+// `hide()` needs `core:window:allow-hide` granted explicitly — `core:default`
+// covers only the read-only window calls — and a denied call rejects rather
+// than throwing, so `void` on it discarded the one piece of evidence that
+// anything was wrong. The window simply stayed put with a silent unhandled
+// rejection behind it.
+//
+// The Mac hides on `didResignActiveNotification`, which is an *application*
+// event: it fires when another app takes over, and explicitly not when focus
+// moves between Envy's own windows, so this "can't accidentally hide the main
+// window out from under those". Tauri has no app-level equivalent — focus is
+// reported per window — so the same guarantee has to be reconstructed by asking
+// whether any Envy window still holds focus before hiding. Without it, opening
+// the pinned note would blur the main window and hide it, which is the exact
+// accident the Mac's comment is about.
+//
+// The wait is what makes that check meaningful: at the moment the blur arrives
+// the incoming window has not been marked focused yet, so an immediate poll
+// reports nothing focused and hides regardless. Both calls used here are
+// read-only and already covered by `core:default`.
+async function anyEnvyWindowFocused(): Promise<boolean> {
+  const windows = await getAllWindows()
+  const focused = await Promise.all(windows.map((w) => w.isFocused().catch(() => false)))
+  return focused.some(Boolean)
+}
+
 try {
-  void getCurrentWindow().onFocusChanged(({ payload: focused }) => {
-    if (!focused && settings.hideOnBlur && settingsEl.classList.contains('hidden')) {
-      void getCurrentWindow().hide()
+  void getCurrentWindow().onFocusChanged(async ({ payload: focused }) => {
+    if (focused || !settings.hideOnFocusLoss) return
+    // Settings is an in-page overlay rather than its own window, so it needs
+    // its own guard — losing the panel mid-change would be the same accident.
+    if (!settingsEl.classList.contains('hidden')) return
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      if (await anyEnvyWindowFocused()) return
+      await getCurrentWindow().hide()
+    } catch (err) {
+      console.error('could not hide on focus loss', err)
     }
   })
 } catch {

@@ -106,11 +106,16 @@ async function flush() {
 
 /// Hiding is deliberately allowed to fail without taking the caller with it.
 ///
-/// It failed silently once already: capabilities are per-window, this window
-/// wasn't listed in one, and `hide()` was rejected at runtime. Because both
-/// buttons awaited the hide *before* doing their work, the rejection killed
-/// the action and neither button appeared to do anything at all. The work now
-/// happens first, and a hide that fails is logged rather than swallowed.
+/// It failed silently once already, and for longer than first diagnosed. The
+/// original reading was that this window was missing from a capability's
+/// `windows` list — true, and necessary to fix, but not the whole cause.
+/// `hide()` also needs `core:window:allow-hide` named explicitly: `core:default`
+/// sounds comprehensive but its window half covers only the read-only calls, so
+/// hiding was still being rejected after the window was listed. Because both
+/// buttons awaited the hide *before* doing their work, the rejection killed the
+/// action and neither button appeared to do anything; reordering made them work
+/// while the hide itself went on failing into this log line, which is precisely
+/// what a caught-and-logged error is for.
 async function hide() {
   try {
     await getCurrentWindow().hide()
