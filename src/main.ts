@@ -4,6 +4,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { open as openFolderPicker } from '@tauri-apps/plugin-dialog'
+import { getVersion } from '@tauri-apps/api/app'
 import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window'
 import {
   embedHost,
@@ -2286,7 +2287,28 @@ const REFERENCE_TABS: Array<[ReferenceTab, string]> = [
   ['about', 'About'],
 ]
 
-let appVersion = '0.1.0'
+/// Asked of the app itself rather than written down here.
+///
+/// It used to be the literal "0.1.0", which nothing ever updated — so About
+/// went on claiming 0.1.0 while the installed build was 0.1.1, and would have
+/// drifted further with every release. A version string that has to be edited
+/// by hand in a second place is a version string that will eventually lie, and
+/// About is the one screen whose entire job is to answer this accurately.
+///
+/// "unknown" only shows outside Tauri, where there is no app to ask.
+/// Wrapped, not just `.catch()`ed, for the same reason the focus handler below
+/// is: outside Tauri these helpers can throw synchronously rather than reject,
+/// and an uncaught throw at module scope takes the rest of the script with it.
+let appVersion = 'unknown'
+try {
+  void getVersion()
+    .then((v) => {
+      appVersion = v
+    })
+    .catch((err) => console.error('could not read the app version', err))
+} catch (err) {
+  console.error('could not read the app version', err)
+}
 
 function openReference(tab: ReferenceTab) {
   referenceTabsEl.replaceChildren(
