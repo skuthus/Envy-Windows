@@ -18,6 +18,13 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import { envyStyler } from './styler'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 
+// This window is where the silent-failure pattern first bit — see `hide()`
+// below. Its own entry point, so it needs its own handler; the main window's
+// does not cover it.
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('unhandled rejection — something failed silently:', e.reason)
+})
+
 interface NoteDto {
   id: string
   title: string

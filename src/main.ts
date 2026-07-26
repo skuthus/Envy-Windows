@@ -43,6 +43,21 @@ import {
   type ShortcutId,
 } from './shortcuts'
 
+// Nothing in this app should be able to fail silently again.
+//
+// Three separate features shipped broken for the same reason: a Tauri call was
+// denied by a missing capability, the denial arrived as a *rejected promise*
+// rather than a thrown error, and the call site discarded it with `void` or an
+// un-awaited async handler. A rejected promise nobody is listening to produces
+// no console output, no dialog, and no clue — the control simply does nothing,
+// which is indistinguishable from a control that was never wired up.
+//
+// This makes the whole class audible at the one place every one of them
+// surfaces, rather than relying on each call site to remember a `.catch()`.
+window.addEventListener('unhandledrejection', (e) => {
+  console.error('unhandled rejection — something failed silently:', e.reason)
+})
+
 interface NoteDto {
   id: string
   title: string
