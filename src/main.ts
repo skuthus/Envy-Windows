@@ -637,6 +637,9 @@ const settings = {
   showInTaskbar: boolSetting('showInTaskbar', true),
   showFooterClock: boolSetting('showFooterClock', false),
   showFooterClockDate: boolSetting('showFooterClockDate', false),
+  showFooterClockOnlyWhenFullScreen: boolSetting('showFooterClockOnlyWhenFullScreen', false),
+  footerClockDateFormat: localStorage.getItem('footerClockDateFormat') ?? 'short',
+  boldFileListText: boolSetting('boldFileListText', false),
   templateDateFormat: localStorage.getItem('templateDateFormat') ?? 'yyyy-MM-dd',
   trashMaxAgeDays: Number(localStorage.getItem('trashMaxAgeDays') ?? '0'),
 }
@@ -2146,6 +2149,14 @@ const SHORTCUT_HANDLERS: Partial<Record<ShortcutId, () => void>> = {
     searchInput.value = ''
     void runSearch()
   },
+  // The Mac's newFromTemplateRequested does exactly this — puts "template:" in
+  // the search field and focuses it. The template list is already what that
+  // query shows, so the shortcut is a way into it rather than a separate mode.
+  newFromTemplate: () => {
+    searchInput.value = 'template:'
+    searchInput.focus()
+    void runSearch()
+  },
   focusNextArea: () => {
     if (document.activeElement === searchInput) view.focus()
     else searchInput.focus()
@@ -2251,28 +2262,80 @@ darkQuery.addEventListener('change', syncTheme)
 const clockEl = document.getElementById('footer-clock')!
 const loadingEl = document.getElementById('loading-indicator')!
 
+/// The four clock date formats, matching the Mac's `ClockDateFormat` exactly —
+/// the same four cases, in the same order, producing the same shapes.
+function formatClockDate(d: Date): string {
+  switch (settings.footerClockDateFormat) {
+    case 'medium':
+      return d.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })
+    case 'full':
+      return d.toLocaleDateString(undefined, {
+        weekday: 'long',
+        month: 'long',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    case 'numeric':
+      return d.toLocaleDateString(undefined, {
+        month: 'numeric',
+        day: 'numeric',
+        year: 'numeric',
+      })
+    default:
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+  }
+}
+
+/// Whether the window currently fills the screen.
+///
+/// macOS has a real full-screen mode a window is either in or not. Windows has
+/// both true full screen and maximised, and maximised is what someone here
+/// means by it, so either counts.
+///
+/// Asked of the window rather than inferred by comparing `outerWidth` against
+/// `screen.width`. That comparison is not just approximate, it fails *unsafely*:
+/// where those values are unavailable they are all zero, zero matches zero, and
+/// it concludes the window is full screen — so the setting silently stops
+/// hiding anything. Both calls are read-only and already in `core:window:default`.
+async function isFullScreen(): Promise<boolean> {
+  try {
+    const w = getCurrentWindow()
+    return (await w.isFullscreen()) || (await w.isMaximized())
+  } catch {
+    // Outside Tauri. Reporting "not full screen" keeps the clock visible rather
+    // than hiding it for a reason that cannot be checked.
+    return false
+  }
+}
+
 /// Ticks on a timer rather than being computed once — a clock rendered from a
 /// value read at startup freezes at whatever time the app happened to open.
 let clockTimer: number | undefined
 function startClockTick() {
-  const tick = () => {
+  const tick = async () => {
     if (!settings.showFooterClock) {
+      clockEl.classList.add('hidden')
+      return
+    }
+    // "Only in full screen" is for people who want the clock exactly when the
+    // window is covering the one in the system tray, and not otherwise.
+    if (settings.showFooterClockOnlyWhenFullScreen && !(await isFullScreen())) {
       clockEl.classList.add('hidden')
       return
     }
     const now = new Date()
     const time = now.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
     clockEl.textContent = settings.showFooterClockDate
-      ? `${now.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${time}`
+      ? `${formatClockDate(now)} · ${time}`
       : time
     clockEl.classList.remove('hidden')
   }
-  tick()
+  void tick()
   window.clearInterval(clockTimer)
   // Every 30s, matching the Mac's own cadence — a minute-resolution clock
   // doesn't need per-second work, but a 60s tick can show a stale minute for
   // almost a whole one.
-  clockTimer = window.setInterval(tick, 30_000)
+  clockTimer = window.setInterval(() => void tick(), 30_000)
 }
 
 /// Shown while a rescan is in flight. It lives in the footer rather than above
@@ -2386,8 +2449,11 @@ function openSettings() {
   dropdown('setting-text-size').value = String(settings.interfaceTextSize)
   checkbox('setting-fade-focus').checked = settings.fadeFocusHighlight
   checkbox('setting-taskbar').checked = settings.showInTaskbar
+  checkbox('setting-bold-list').checked = settings.boldFileListText
   checkbox('setting-clock').checked = settings.showFooterClock
   checkbox('setting-clock-date').checked = settings.showFooterClockDate
+  checkbox('setting-clock-fullscreen').checked = settings.showFooterClockOnlyWhenFullScreen
+  dropdown('setting-clock-date-format').value = settings.footerClockDateFormat
   recording = null
   renderShortcutSettings()
   dropdown('setting-trash-age').value = String(settings.trashMaxAgeDays)
@@ -2430,6 +2496,10 @@ function applyChromeSettings() {
     '--envy-ui-scale',
     String(settings.interfaceTextSize),
   )
+  // A class rather than a style property, because it applies to the row's text
+  // and not to a value the row is sized by — the Mac passes it into NoteRow as
+  // the `bold` flag on every Text in the row.
+  document.body.classList.toggle('bold-file-list', settings.boldFileListText)
 }
 
 /// Binds a checkbox to a boolean setting, persisting it and running whatever
@@ -2502,6 +2572,13 @@ bindToggle('setting-taskbar', 'showInTaskbar', () =>
 )
 bindToggle('setting-clock', 'showFooterClock', startClockTick)
 bindToggle('setting-clock-date', 'showFooterClockDate', startClockTick)
+bindToggle('setting-clock-fullscreen', 'showFooterClockOnlyWhenFullScreen', startClockTick)
+bindToggle('setting-bold-list', 'boldFileListText', applyChromeSettings)
+dropdown('setting-clock-date-format').onchange = (e) => {
+  settings.footerClockDateFormat = (e.target as HTMLSelectElement).value
+  saveSetting('footerClockDateFormat', settings.footerClockDateFormat)
+  startClockTick()
+}
 
 dropdown('setting-link-preview').onchange = (e) => {
   settings.linkPreview = (e.target as HTMLSelectElement).value

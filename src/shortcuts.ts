@@ -7,6 +7,7 @@
 
 export type ShortcutId =
   | 'jumpToSearch'
+  | 'newFromTemplate'
   | 'deleteNote'
   | 'restoreDeletedNote'
   | 'toggleLayout'
@@ -47,6 +48,7 @@ export const SHORTCUT_SPECS: ShortcutSpec[] = [
   { id: 'unpinFromTray', label: 'Unpin Note from Tray (works from any app)', default: 'Ctrl+Alt+Shift+P', global: true },
   { id: 'jumpToSearch', label: 'Jump to Search', default: 'Ctrl+L' },
   { id: 'clearSearch', label: 'Clear Search', default: 'Alt+Backspace' },
+  { id: 'newFromTemplate', label: 'New Note from Template', default: 'Ctrl+Shift+N' },
   { id: 'deleteNote', label: 'Delete Note', default: 'Ctrl+Backspace' },
   { id: 'restoreDeletedNote', label: 'Restore Deleted Note', default: 'Ctrl+Shift+Backspace' },
   { id: 'togglePin', label: 'Pin/Unpin Note', default: 'Ctrl+Alt+P' },

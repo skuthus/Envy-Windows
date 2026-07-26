@@ -359,6 +359,12 @@ body.fade-focus #editor-pane:focus-within {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* "Bold file list text" — the Mac applies its `bold` flag to every Text in the
+   row (title, preview and date alike), not to the title alone. */
+body.bold-file-list .row-title,
+body.bold-file-list .row-meta,
+body.bold-file-list .row-date { font-weight: 700; }
+
 .row-meta {
   flex: 1 1 0;
   min-width: 0;
