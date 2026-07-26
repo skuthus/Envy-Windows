@@ -630,6 +630,7 @@ const settings = {
   // "hideOnFocusLoss" and saved "hideOnBlur", so the choice survived until the
   // next launch and no further. The key matches the Mac's own preference.
   hideOnFocusLoss: boolSetting('hideOnFocusLoss', false),
+  restoreFocusOnSummon: boolSetting('restoreFocusOnSummon', true),
   linkPreview: localStorage.getItem('linkPreviewTrigger') ?? 'altClick',
   listDensity: localStorage.getItem('listDensity') ?? 'compact',
   interfaceTextSize: Number(localStorage.getItem('interfaceTextSize') ?? '1'),
@@ -2213,7 +2214,14 @@ void listen('index-changed', async () => {
 })
 
 // Summoning should land in the search box — the point of summoning is to type.
-void listen('focus-search', () => {
+// "Keep focus where it was when summoned" — on by default, as on the Mac.
+//
+// The window is hidden rather than torn down between summons, so whatever had
+// focus still has it when it comes back; the setting only decides whether to
+// override that. Turning it off sends focus to the search box, which is what
+// this did unconditionally before the setting existed.
+void listen('summoned', () => {
+  if (settings.restoreFocusOnSummon) return
   searchInput.focus()
   searchInput.select()
 })
@@ -2382,10 +2390,29 @@ try {
   void getVersion()
     .then((v) => {
       appVersion = v
+      showWhatsNewIfUpdated(v)
     })
     .catch((err) => console.error('could not read the app version', err))
 } catch (err) {
   console.error('could not read the app version', err)
+}
+
+/// Opens What's New the first time a given version runs, and never again.
+///
+/// The stored version is written *before* the panel opens, not after, so a
+/// crash or a quit while reading it doesn't queue the same announcement up for
+/// every launch that follows. Seen once is seen.
+///
+/// A fresh install has no stored version and so would be shown release notes
+/// for a build it has no history with — the Mac has the same shape, but there
+/// the empty string is also what a first launch sees, and it treats that as
+/// "record the version, say nothing".
+function showWhatsNewIfUpdated(version: string) {
+  if (!version || version === 'unknown') return
+  const seen = localStorage.getItem('lastSeenWhatsNewVersion')
+  saveSetting('lastSeenWhatsNewVersion', version)
+  if (seen === null || seen === version) return
+  openReference('whatsnew')
 }
 
 function openReference(tab: ReferenceTab) {
@@ -2443,6 +2470,7 @@ function openSettings() {
   checkbox('setting-require-modifier').checked = settings.requireModifierForLinkClick
   checkbox('setting-show-interlinks').checked = settings.showBacklinks
   checkbox('setting-hide-on-blur').checked = settings.hideOnFocusLoss
+  checkbox('setting-restore-focus').checked = settings.restoreFocusOnSummon
   dropdown('setting-date-style').value = settings.dateDisplayStyle
   dropdown('setting-link-preview').value = settings.linkPreview
   dropdown('setting-density').value = settings.listDensity
@@ -2545,6 +2573,7 @@ bindToggle('setting-show-due-pill', 'showDuePill', () => {
 bindToggle('setting-require-modifier', 'requireModifierForLinkClick')
 bindToggle('setting-show-interlinks', 'showBacklinks', renderInterlinks)
 bindToggle('setting-hide-on-blur', 'hideOnFocusLoss')
+bindToggle('setting-restore-focus', 'restoreFocusOnSummon')
 
 dropdown('setting-date-style').onchange = (e) => {
   settings.dateDisplayStyle = (e.target as HTMLSelectElement).value

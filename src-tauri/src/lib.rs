@@ -1122,9 +1122,12 @@ fn toggle_window(window: &WebviewWindow) {
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
-        // The search box is where a summon should land — the point of
-        // summoning is to type.
-        let _ = window.emit("focus-search", ());
+        // Announces the summon rather than dictating what happens next. Where
+        // focus lands is the "Keep focus where it was when summoned" setting,
+        // which lives in the frontend, so this used to be an unconditional
+        // "focus-search" — which is that setting permanently switched off, and
+        // the opposite of the Mac's default.
+        let _ = window.emit("summoned", ());
     }
 }
 
@@ -1238,6 +1241,30 @@ pub fn run() {
         // shipped without it has nothing to verify an update with, so it can
         // never update itself — only a manual reinstall fixes it.
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // The window comes back the size and place it was left. macOS gives a
+        // WindowGroup this for free through AppKit's state restoration, which is
+        // why the Mac has no code for it; Windows has no equivalent, so without
+        // this every launch snapped back to the 800x600 in tauri.conf.json.
+        //
+        // Size, position and maximised only. Deliberately not VISIBLE: this
+        // window is hidden rather than closed — by the tray, the summon hotkey
+        // and hide-on-focus-loss — so restoring that would mean quitting while
+        // hidden opens the app to nothing at all next time, with only the tray
+        // to explain where it went.
+        //
+        // The pinned popover is excluded because its position is not the user's
+        // to keep: it is placed against the tray each time it opens, and a
+        // remembered position would drag it away from the icon it belongs to.
+        .plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(
+                    tauri_plugin_window_state::StateFlags::SIZE
+                        | tauri_plugin_window_state::StateFlags::POSITION
+                        | tauri_plugin_window_state::StateFlags::MAXIMIZED,
+                )
+                .with_denylist(&[PINNED_WINDOW])
+                .build(),
+        )
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
