@@ -1152,6 +1152,8 @@ body.popover {
   border-left: 2px solid color-mix(in srgb, var(--envy-marker) 80%, transparent);
   padding-left: 10px;
 }
+/* Italic belongs to the quoted text, not to the ">" that introduces it. */
+.envy-blockquote-text { font-style: italic; }
 
 /* --- Tasks --------------------------------------------------------------- */
 .envy-checkbox {

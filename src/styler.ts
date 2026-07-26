@@ -303,6 +303,7 @@ const styles = {
   wikiLink: mark('envy-wikilink'),
   tag: mark('envy-tag'),
   blockquote: mark('envy-blockquote'),
+  blockquoteText: mark('envy-blockquote-text'),
   footnote: mark('envy-footnote'),
   completedTask: mark('envy-completed-task'),
   marker: mark('envy-marker'),
@@ -531,9 +532,27 @@ function buildDecorations(view: EditorView): DecorationSet {
 
     for (const m of text.matchAll(P.blockquote)) {
       const s = base + m.index!
-      if (insideCode(s, s + m[0].length)) continue
-      marks.push({ from: s, to: s + m[0].length, deco: styles.blockquote })
-      marks.push({ from: s, to: s + m[1].length, deco: styles.marker })
+      const end = s + m[0].length
+      if (insideCode(s, end)) continue
+      // A bare ">" with nothing after it is left alone entirely, as on the Mac
+      // — no rule, no indent, no collapse. There is no quote yet, only the
+      // character that starts one, and hiding it would delete what you just
+      // typed from under the cursor.
+      if (m[2].length === 0) continue
+      const markerEnd = s + m[1].length
+      marks.push({ from: s, to: end, deco: styles.blockquote })
+      // Italic on the content alone, not the marker — the Mac applies the
+      // italic font to its contentRange only, the same way every other element
+      // here confines marker colour to the marker's own range.
+      marks.push({ from: markerEnd, to: end, deco: styles.blockquoteText })
+      // The ">" is markup, so it collapses once the cursor leaves the line and
+      // comes back the moment it returns — exactly as headings and task boxes
+      // already do. Leaving it permanently visible was the odd one out.
+      if (!selectionTouches(view, s, end)) {
+        marks.push({ from: s, to: markerEnd, deco: hidden })
+      } else {
+        marks.push({ from: s, to: markerEnd, deco: styles.marker })
+      }
     }
 
     for (const m of text.matchAll(P.horizontalRule)) {
