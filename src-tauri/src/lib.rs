@@ -862,6 +862,15 @@ fn build_tray_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, Box<dyn s
     let unpin = MenuItem::with_id(app, "unpin", "Unpin Note", is_pinned, None::<&str>)?;
 
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    // The Mac carries "Check for Updates…" as a menu command beside the
+    // automatic background check, for anyone who would rather ask than wait.
+    let check_updates = MenuItem::with_id(
+        app,
+        "check_updates",
+        "Check for Updates…",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit Envy", true, None::<&str>)?;
 
     Ok(Menu::with_items(
@@ -873,9 +882,90 @@ fn build_tray_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, Box<dyn s
             &unpin,
             &PredefinedMenuItem::separator(app)?,
             &settings,
+            &check_updates,
             &quit,
         ],
     )?)
+}
+
+/// Looks for a newer release and, if the user agrees, installs it and restarts.
+///
+/// `manual` is the difference between the check the app runs at launch and the
+/// one the menu command runs: only the latter reports finding nothing. A
+/// background check that announced "no updates" every launch would be noise,
+/// but a menu command that appeared to do nothing at all would look broken.
+///
+/// Note that shipping the public key is only half of what makes updates
+/// possible. The installed build also has to actually perform this check —
+/// a release that never asks will never discover its successor no matter what
+/// key it was signed against.
+async fn run_update_check(app: tauri::AppHandle, manual: bool) {
+    use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+    use tauri_plugin_updater::UpdaterExt;
+
+    let found = match app.updater() {
+        Ok(updater) => updater.check().await,
+        Err(e) => Err(e),
+    };
+
+    match found {
+        Ok(Some(update)) => {
+            let version = update.version.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            app.dialog()
+                .message(format!(
+                    "Envy {version} is available.\n\nInstall it now? Envy will restart."
+                ))
+                .title("Update Available")
+                .buttons(MessageDialogButtons::OkCancelCustom(
+                    "Install".into(),
+                    "Later".into(),
+                ))
+                .show(move |install| {
+                    let _ = tx.send(install);
+                });
+            // The dialog answers on another thread, so this waits for the click
+            // rather than racing past it. Safe here because this only ever runs
+            // inside a spawned task, never on the thread driving the UI.
+            if rx.recv().unwrap_or(false) {
+                // No progress or total-length handling: this is a ~10MB
+                // download, and a progress bar is worth building when there is
+                // somewhere in the interface to put one.
+                match update.download_and_install(|_, _| {}, || {}).await {
+                    Ok(()) => app.restart(),
+                    Err(e) => {
+                        app.dialog()
+                            .message(format!("The update could not be installed.\n\n{e}"))
+                            .kind(MessageDialogKind::Error)
+                            .title("Update Failed")
+                            .blocking_show();
+                    }
+                }
+            }
+        }
+        Ok(None) => {
+            if manual {
+                app.dialog()
+                    .message("Envy is up to date.")
+                    .title("No Updates")
+                    .blocking_show();
+            }
+        }
+        Err(e) => {
+            // A failed background check is not worth interrupting anyone for —
+            // being offline is the usual cause, and it will try again next
+            // launch. A check the user explicitly asked for does need an answer.
+            if manual {
+                app.dialog()
+                    .message(format!("Could not check for updates.\n\n{e}"))
+                    .kind(MessageDialogKind::Error)
+                    .title("Update Check Failed")
+                    .blocking_show();
+            } else {
+                eprintln!("background update check failed: {e}");
+            }
+        }
+    }
 }
 
 /// Re-applies the tray menu after anything it reflects has changed.
@@ -974,6 +1064,10 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                         let _ = w.set_focus();
                         let _ = w.emit("open-settings", ());
                     }
+                }
+                "check_updates" => {
+                    let handle = app.clone();
+                    tauri::async_runtime::spawn(run_update_check(handle, true));
                 }
                 "quit" => app.exit(0),
                 _ => {}
@@ -1138,6 +1232,12 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        // Checks the endpoint in tauri.conf.json and verifies whatever it finds
+        // against the public key compiled in beside it. That key is why this has
+        // to exist before the first release rather than after: an install that
+        // shipped without it has nothing to verify an update with, so it can
+        // never update itself — only a manual reinstall fixes it.
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -1154,6 +1254,14 @@ pub fn run() {
                 }
             }
             let store = NoteStore::open(&dir, false)?;
+
+            // The scheduled background check, matching Sparkle's
+            // `startingUpdater: true` on the Mac. Spawned rather than awaited so
+            // a slow or unreachable endpoint delays nothing — the window opens
+            // regardless and the dialog appears later if there is anything to
+            // say.
+            let updater_handle = app.handle().clone();
+            tauri::async_runtime::spawn(run_update_check(updater_handle, false));
 
             let suppress_until = Arc::new(Mutex::new(Instant::now()));
 

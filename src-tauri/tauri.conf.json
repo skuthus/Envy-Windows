@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "envy-windows",
+  "productName": "Envy",
   "version": "0.1.0",
   "identifier": "app.envynote.windows",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "envy-windows",
+        "title": "Envy",
         "width": 800,
         "height": 600
       }
@@ -25,6 +25,12 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "Skyler Schoos",
+    "copyright": "© Skyler Schoos",
+    "homepage": "https://envynote.app",
+    "shortDescription": "A flat-file, frictionless note-taking application",
+    "longDescription": "Envy keeps every note as a plain Markdown file in a folder you choose, so the notes outlive the app. Search, wiki-links, due dates and templates, with no database and no lock-in.",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -32,5 +38,13 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/skuthus/Envy-Windows/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEI1NDFFRUY3RkQ5MDg5RTEKUldUaGlaRDk5KzVCdGNlZG1pZitRTEpUSFVURnZtYmFqRlRzSjFTUkRMZTNOdy9xd2psd2Z6YmYK"
+    }
   }
 }
