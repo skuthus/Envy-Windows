@@ -8,9 +8,21 @@ else you like.
 Built by [Skyler Schoos](https://github.com/skuthus). The macOS original is at
 [envynote.app](https://envynote.app).
 
+## Download
+
+**[Envy 0.1.0 for Windows](https://github.com/skuthus/Envy-Windows/releases/latest)** — download
+`Envy_0.1.0_x64-setup.exe` and run it.
+
+Windows will show **"Windows protected your PC"** the first time. This build is
+not code-signed, so SmartScreen has no publisher to recognise: click **More
+info**, then **Run anyway**. Some antivirus software flags unsigned installers
+for the same reason.
+
 ## Status
 
-Early. Not yet usable, not yet released.
+Beta. Everything below is built and in use except themes — the colour settings
+and theme gallery are not written yet, so Envy follows the system light/dark
+setting only.
 
 ## Why this is a port and not a build target
 
