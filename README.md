@@ -10,8 +10,12 @@ Built by [Skyler Schoos](https://github.com/skuthus). The macOS original is at
 
 ## Download
 
-**[Envy 0.1.0 for Windows](https://github.com/skuthus/Envy-Windows/releases/latest)** — download
-`Envy_0.1.0_x64-setup.exe` and run it.
+**[Envy for Windows — latest release](https://github.com/skuthus/Envy-Windows/releases/latest)** —
+download the `.exe` installer and run it.
+
+Deliberately not naming a version here. The link already resolves to whatever
+the newest release is, and a number written out in prose is one more place to
+forget to update — About said 0.1.0 for exactly that reason.
 
 Windows will show **"Windows protected your PC"** the first time. This build is
 not code-signed, so SmartScreen has no publisher to recognise: click **More

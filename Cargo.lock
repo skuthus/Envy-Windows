@@ -1013,7 +1013,7 @@ dependencies = [
 
 [[package]]
 name = "envy-windows"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "chrono",
  "dirs 5.0.1",
