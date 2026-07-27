@@ -254,17 +254,25 @@ body.fade-focus #editor-pane:focus-within {
 .sort-group, .row-date { grid-column: 2; }
 
 /* Both sort buttons share the value column, since either one can be the field
-   on display there. */
-.sort-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+   on display there. Pushed to the trailing edge so the headings sit over the
+   values, which are right-aligned in that same column. */
+.sort-group {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
 
 #list-header {
   align-items: center;
   padding: 8px 12px 6px;
-  /* The list below scrolls, and its scrollbar takes real layout width off the
-     rows. `scrollbar-gutter: stable` on #list makes it always do so, whether or
-     not the list currently overflows, and matching that here keeps the headings
-     over their columns instead of drifting by the scrollbar's width. */
-  padding-right: calc(12px + var(--envy-scrollbar-width));
+  /* A flat 12px, unlike the rows below, and for the same reason they are not
+     flat: this header sits *outside* the scrolling element, so it never pays
+     the scrollbar gutter. The rows subtract the gutter from their trailing
+     padding, which lands their content edge at 12px from the pane — so plain
+     12px here is what puts the headings over their values. */
+  padding-right: 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 30%, transparent);
 }
 .sort-button {
@@ -334,7 +342,16 @@ body.fade-focus #editor-pane:focus-within {
 
 .row {
   align-items: baseline;
-  padding: var(--envy-row-padding) 12px;
+  /* 12px each side, matching the Mac's 8 on the row plus 4 on the stack around
+     it — except that the trailing side has to pay for the scrollbar gutter as
+     well. The gutter is reserved whether or not a scrollbar is showing (see
+     #list), so a flat 12px here put the date 22px from the pane edge, and the
+     ten pixels of empty gutter read as the column being adrift. macOS never has
+     this problem: its scrollbars overlay the content rather than taking width
+     from it. Subtracting the gutter puts the trailing edge back at the Mac's
+     12px, without giving up the stability the reserved gutter buys. */
+  padding: var(--envy-row-padding) calc(12px - var(--envy-scrollbar-width))
+    var(--envy-row-padding) 12px;
   cursor: default;
 }
 .row.highlighted { background: var(--envy-selection); }
@@ -371,11 +388,16 @@ body.fade-focus #editor-pane:focus-within {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Left-aligned in their own fixed column rather than pushed against the right
-   edge, so every row's date begins at the same x and the column reads as a
-   column. Clipped with an ellipsis for the narrow layout, where the cap above
-   can make the track shorter than the text. */
+/* Right-aligned within its fixed column, so every row's date ends flush at the
+   same edge. This is what the Mac does — its row is an HStack with a Spacer
+   before the date, which pushes it to the trailing edge — and with a single
+   value column there is nothing to the right of it that left alignment would
+   line up with, only empty track.
+
+   Clipped with an ellipsis for the narrow layout, where the cap above can make
+   the track shorter than the text. */
 .row-date {
+  text-align: right;
   color: var(--envy-blockquote);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
