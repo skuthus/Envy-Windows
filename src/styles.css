@@ -576,6 +576,21 @@ body.popover {
   color: var(--envy-text);
   background: color-mix(in srgb, var(--envy-marker) 20%, transparent);
 }
+/* The keep-open pin. Square rather than a labelled button, since it is a state
+   you glance at rather than a command you read, and tinted when on — the Mac
+   swaps a hollow pin for a filled one and colours it with the accent. */
+#pinned-keep-open {
+  padding: 2px 6px;
+  line-height: 1;
+  filter: grayscale(1);
+  opacity: 0.55;
+}
+#pinned-keep-open.active {
+  filter: none;
+  opacity: 1;
+  border-color: color-mix(in srgb, var(--envy-link) 70%, transparent);
+  background: color-mix(in srgb, var(--envy-link) 18%, transparent);
+}
 
 #pinned-editor { flex: 1; min-height: 0; overflow: hidden; }
 

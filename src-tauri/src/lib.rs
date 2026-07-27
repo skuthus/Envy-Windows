@@ -4,7 +4,7 @@
 //! `envy-core`, which knows nothing about Tauri or a UI. This layer only
 //! serializes across the boundary.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -1280,6 +1280,8 @@ pub fn run() {
                     std::fs::write(&welcome, WELCOME_NOTE)?;
                 }
             }
+            seed_sample_templates_if_needed(app.handle(), &dir);
+
             let store = NoteStore::open(&dir, false)?;
 
             // The scheduled background check, matching Sparkle's
@@ -1370,6 +1372,59 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// The starter templates seeded into Templates/ on first launch, transcribed
+/// from the Mac's `TemplateContent.samples`.
+///
+/// The Daily Notes template carries `{{date}}` in its *name*, not just its
+/// body, so a note made from it is titled "Daily Notes July 11, 2026" straight
+/// away rather than leaving a "Daily Notes" to rename by hand every day.
+/// `create_from_template` already substitutes the placeholders in both.
+const SAMPLE_TEMPLATES: [(&str, &str); 3] = [
+    (
+        "Daily Notes {{date}}",
+        "# {{date}}\n\n## Top Priorities\n-\n\n## Notes\n\n\n## Follow Up\n-",
+    ),
+    ("To-Do List", "# {{title}}\n\n- [ ]\n- [ ]\n- [ ]"),
+    (
+        "Study Notes",
+        "# {{title}}\n\n## Key Concepts\n\n\n## Questions\n\n\n## Summary\n",
+    ),
+];
+
+/// Writes the starter templates once, on the first launch that ever runs.
+///
+/// Gated on a marker file rather than on the Templates folder being empty,
+/// which matters: emptiness would put the samples back every time someone
+/// deleted them, and deleting a template you did not ask for should stick. The
+/// Mac gates on a `hasSeededSampleTemplates` flag for the same reason.
+///
+/// The marker is written *before* the templates, as the Mac sets its flag
+/// before writing too — if a write fails, one missing template is a far better
+/// outcome than trying again on every launch forever.
+fn seed_sample_templates_if_needed(app: &tauri::AppHandle, dir: &Path) {
+    let Ok(config) = app.path().app_config_dir() else {
+        return;
+    };
+    let marker = config.join("seeded-templates");
+    if marker.exists() {
+        return;
+    }
+    if std::fs::create_dir_all(&config).is_err() || std::fs::write(&marker, "").is_err() {
+        return;
+    }
+    let templates = dir.join("Templates");
+    if std::fs::create_dir_all(&templates).is_err() {
+        return;
+    }
+    for (name, body) in SAMPLE_TEMPLATES {
+        let path = templates.join(format!("{name}.md"));
+        // Never overwrite: a file already under this name is the user's.
+        if !path.exists() {
+            let _ = std::fs::write(&path, body);
+        }
+    }
 }
 
 const WELCOME_NOTE: &str = r#"# Welcome to Envy

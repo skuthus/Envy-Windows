@@ -131,16 +131,11 @@ async function hide() {
   }
 }
 
-document.getElementById('pinned-unpin')!.onclick = async () => {
-  await flush()
-  try {
-    await invoke('set_pinned_note', { id: null })
-  } catch (e) {
-    console.error('unpin failed', e)
-  }
-  await hide()
-}
-
+// No Unpin button here, matching the Mac: its popover carries the keep-open pin
+// and "Open in Envy", nothing else. Unpinning is a thing you do to the tray, not
+// something the note's own window should offer — and it stays reachable three
+// ways: "Unpin Note" in the tray menu, "Unpin from Tray" on the note's context
+// menu, and Ctrl+Alt+Shift+P from any app.
 document.getElementById('pinned-open')!.onclick = async () => {
   await flush()
   try {
@@ -151,8 +146,78 @@ document.getElementById('pinned-open')!.onclick = async () => {
   await hide()
 }
 
+// --- Keep open ---------------------------------------------------------------
+// The Mac's panel closes as soon as focus moves elsewhere, unless its pin
+// button is on — that button is the whole reason the behaviour exists. This
+// window had neither half: it never closed on its own, which is the pinned-open
+// state permanently, so adding the toggle alone would have changed nothing.
+
+let keepOpen = localStorage.getItem('menuBarPopoverPinnedOpen') === 'true'
+const keepOpenEl = document.getElementById('pinned-keep-open') as HTMLButtonElement
+
+function renderKeepOpen() {
+  keepOpenEl.classList.toggle('active', keepOpen)
+  keepOpenEl.title = keepOpen
+    ? 'Keeping this window open — click to let it close when you click elsewhere'
+    : 'Keep this window open and on top, even when you click elsewhere'
+}
+
+keepOpenEl.onclick = () => {
+  keepOpen = !keepOpen
+  localStorage.setItem('menuBarPopoverPinnedOpen', String(keepOpen))
+  renderKeepOpen()
+}
+renderKeepOpen()
+
+// Closing on blur is what the pin suppresses. The note is flushed first —
+// losing focus is not a reason to lose an edit.
+try {
+  void getCurrentWindow().onFocusChanged(async ({ payload: focused }) => {
+    if (focused || keepOpen) return
+    await flush()
+    await hide()
+  })
+} catch {
+  // Running outside Tauri.
+}
+
+// --- Zoom --------------------------------------------------------------------
+// The popover keeps its own zoom, separate from the editor's. An offset in
+// points rather than a multiplier, and clamped to the Mac's own -6…+24.
+
+let popoverZoom = Number(localStorage.getItem('menuBarPopoverFontZoom') ?? '0')
+function applyPopoverZoom() {
+  const base = Number.parseFloat(enviousDark.fontSize)
+  document.documentElement.style.setProperty(
+    '--envy-font-size',
+    `${(base + popoverZoom).toFixed(2)}px`,
+  )
+  localStorage.setItem('menuBarPopoverFontZoom', String(popoverZoom))
+  view.requestMeasure()
+}
+function setPopoverZoom(next: number) {
+  popoverZoom = Math.max(-6, Math.min(24, next))
+  applyPopoverZoom()
+}
+applyPopoverZoom()
+
 window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') void flush().then(hide)
+  if (e.key === 'Escape') {
+    void flush().then(hide)
+    return
+  }
+  if (!e.ctrlKey || e.altKey || e.shiftKey) return
+  // Ctrl and the same three keys the Mac binds to Command.
+  if (e.key === '-') {
+    e.preventDefault()
+    setPopoverZoom(popoverZoom - 1)
+  } else if (e.key === '0') {
+    e.preventDefault()
+    setPopoverZoom(0)
+  } else if (e.key === '=' || e.key === '+') {
+    e.preventDefault()
+    setPopoverZoom(popoverZoom + 1)
+  }
 })
 
 // Re-read on every show: the note may have changed in the app, or been
