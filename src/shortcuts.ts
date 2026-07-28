@@ -8,6 +8,7 @@
 export type ShortcutId =
   | 'jumpToSearch'
   | 'newFromTemplate'
+  | 'extractToNote'
   | 'deleteNote'
   | 'restoreDeletedNote'
   | 'toggleLayout'
@@ -49,6 +50,9 @@ export const SHORTCUT_SPECS: ShortcutSpec[] = [
   { id: 'jumpToSearch', label: 'Jump to Search', default: 'Ctrl+L' },
   { id: 'clearSearch', label: 'Clear Search', default: 'Alt+Backspace' },
   { id: 'newFromTemplate', label: 'New Note from Template', default: 'Ctrl+Shift+N' },
+  // The Mac's ⌥⌘N. It makes a note, so it sits beside the other "new"
+  // shortcuts rather than the formatting ones.
+  { id: 'extractToNote', label: 'Extract Selection to New Note', default: 'Ctrl+Alt+N', editor: true },
   { id: 'deleteNote', label: 'Delete Note', default: 'Ctrl+Backspace' },
   { id: 'restoreDeletedNote', label: 'Restore Deleted Note', default: 'Ctrl+Shift+Backspace' },
   { id: 'togglePin', label: 'Pin/Unpin Note', default: 'Ctrl+Alt+P' },

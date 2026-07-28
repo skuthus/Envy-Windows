@@ -108,6 +108,58 @@ impl NoteStore {
         self.create_in(title, self.directory.clone())
     }
 
+    /// Splits a selection into the title and body of the note it becomes — the
+    /// "one idea per note" move, applied to text already written.
+    ///
+    /// The title is the selection's first non-empty line when that line is
+    /// short enough to read as a name, and the rest of the selection becomes
+    /// the body, so a note doesn't repeat its own title. When the first line is
+    /// too long to serve as one, the title becomes a truncation of it and the
+    /// *entire* selection is kept as the body: a shortened title is a summary,
+    /// not a copy, so dropping the line it came from would lose words someone
+    /// wrote.
+    ///
+    /// Leading Markdown markers are stripped from the title, so extracting a
+    /// heading or a bullet doesn't bake punctuation into a filename, while the
+    /// body keeps them exactly as typed.
+    pub fn extracted_title_and_body(selection: &str) -> (String, String) {
+        const MAX_TITLE: usize = 60;
+        let whole = selection.trim().to_string();
+        let lines: Vec<&str> = selection.split('\n').collect();
+
+        let Some(first) = lines.iter().position(|l| !l.trim().is_empty()) else {
+            return ("Untitled".to_string(), whole);
+        };
+        let candidate = strip_leading_markers(lines[first].trim());
+        if candidate.is_empty() {
+            return ("Untitled".to_string(), whole);
+        }
+
+        // Counted in characters, not bytes — a 60-character title of accented
+        // or CJK text is still a 60-character title.
+        if candidate.chars().count() <= MAX_TITLE {
+            let body = lines[first + 1..].join("\n").trim().to_string();
+            return (sanitize_extracted_title(&candidate), body);
+        }
+
+        // Too long for a name: the title summarises and the body keeps
+        // everything, including the line the title came from.
+        let mut truncated = String::new();
+        for word in candidate.split(' ') {
+            if truncated.chars().count() + word.chars().count() + 1 > MAX_TITLE {
+                break;
+            }
+            if !truncated.is_empty() {
+                truncated.push(' ');
+            }
+            truncated.push_str(word);
+        }
+        if truncated.is_empty() {
+            truncated = candidate.chars().take(MAX_TITLE).collect();
+        }
+        (sanitize_extracted_title(&truncated), whole)
+    }
+
     /// Captures a fleeting note. Creates `Inbox/` on demand, so the feature
     /// works without anyone making the folder by hand first.
     pub fn create_inbox_note(&mut self, title: &str) -> std::io::Result<Note> {
@@ -417,6 +469,52 @@ fn apply_template_tokens(text: &str, title: &str, date_text: &str, time_text: &s
         .replace("{{title}}", title)
 }
 
+/// Drops a leading heading/bullet/quote/number/checkbox marker from a line, so
+/// extracting "## Ideas" or "- [ ] Ship it" names the note for what it says
+/// rather than for the punctuation in front of it.
+fn strip_leading_markers(line: &str) -> String {
+    let mut s = line.trim_start_matches(['#', '>']).trim().to_string();
+    for bullet in ["- ", "* ", "+ "] {
+        if let Some(rest) = s.strip_prefix(bullet) {
+            s = rest.to_string();
+            break;
+        }
+    }
+    // An ordered-list marker, "12. ".
+    if let Some(dot) = s.find('.') {
+        let (digits, rest) = s.split_at(dot);
+        if !digits.is_empty()
+            && digits.chars().all(|c| c.is_ascii_digit())
+            && rest.starts_with(". ")
+        {
+            s = rest[2..].to_string();
+        }
+    }
+    // A task checkbox left over once the bullet is gone.
+    for box_ in ["[ ] ", "[x] ", "[X] "] {
+        if let Some(rest) = s.strip_prefix(box_) {
+            s = rest.to_string();
+            break;
+        }
+    }
+    s.trim().to_string()
+}
+
+/// The Mac's own narrow rule for an extracted title: only the two characters
+/// that would change what path the name means. Deliberately *not*
+/// `filename::sanitize_title`, which is the full Windows-legal treatment —
+/// that still runs afterwards when the file is actually created, so this stays
+/// a faithful port rather than quietly sanitising more than the Mac does and
+/// producing a different title from the same selection.
+fn sanitize_extracted_title(s: &str) -> String {
+    let cleaned = s.replace(['/', ':'], "-").trim().to_string();
+    if cleaned.is_empty() {
+        "Untitled".to_string()
+    } else {
+        cleaned
+    }
+}
+
 fn is_markdown(p: &Path) -> bool {
     p.extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("md"))
@@ -587,6 +685,73 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use tempfile::TempDir;
+
+    fn extracted(s: &str) -> (String, String) {
+        NoteStore::extracted_title_and_body(s)
+    }
+
+    #[test]
+    fn extract_takes_the_first_line_as_the_title() {
+        let (title, body) = extracted("Ship the report\nby Friday\nwith numbers");
+        assert_eq!(title, "Ship the report");
+        // The title's own line is dropped, so the note doesn't repeat itself.
+        assert_eq!(body, "by Friday\nwith numbers");
+    }
+
+    #[test]
+    fn extract_skips_leading_blank_lines() {
+        let (title, body) = extracted("\n\n  Real title\nbody here");
+        assert_eq!(title, "Real title");
+        assert_eq!(body, "body here");
+    }
+
+    #[test]
+    fn extract_strips_markdown_markers_from_the_title_only() {
+        assert_eq!(extracted("## Ideas\n- one").0, "Ideas");
+        assert_eq!(extracted("- [ ] Ship it\nnotes").0, "Ship it");
+        assert_eq!(extracted("> A quote\nrest").0, "A quote");
+        assert_eq!(extracted("12. Numbered thing\nrest").0, "Numbered thing");
+        assert_eq!(extracted("* Starred\nrest").0, "Starred");
+        // The body keeps its markers exactly as typed.
+        assert_eq!(extracted("## Ideas\n- one").1, "- one");
+    }
+
+    /// A shortened title is a summary, not a copy — so the line it came from
+    /// stays in the body rather than being lost.
+    #[test]
+    fn extract_keeps_everything_when_the_title_must_be_truncated() {
+        let long = "a".repeat(80);
+        let selection = format!("{long}\ntail");
+        let (title, body) = extracted(&selection);
+        assert_eq!(title.chars().count(), 60);
+        assert_eq!(body, selection.trim());
+    }
+
+    #[test]
+    fn extract_truncates_on_a_word_boundary_when_it_can() {
+        let selection = "The quick brown fox jumps over the lazy dog and then keeps running onward forever";
+        let (title, _) = extracted(selection);
+        assert!(title.chars().count() <= 60, "{title:?}");
+        // Broken between words, not mid-word.
+        assert!(!title.ends_with(' '));
+        assert!(selection.starts_with(&title), "{title:?}");
+    }
+
+    #[test]
+    fn extract_falls_back_to_untitled() {
+        assert_eq!(extracted("").0, "Untitled");
+        assert_eq!(extracted("   \n\n  ").0, "Untitled");
+        // A line that is nothing but markers leaves no name behind.
+        assert_eq!(extracted("###\nbody").0, "Untitled");
+    }
+
+    /// Only the two characters that would change what path the name means,
+    /// matching the Mac. The full Windows-legal treatment happens later, when
+    /// the file is actually created.
+    #[test]
+    fn extract_replaces_path_separators_in_the_title() {
+        assert_eq!(extracted("Q1/Q2: results\nbody").0, "Q1-Q2- results");
+    }
 
     fn store_with(files: &[(&str, &str)]) -> (TempDir, NoteStore) {
         let dir = tempfile::tempdir().unwrap();

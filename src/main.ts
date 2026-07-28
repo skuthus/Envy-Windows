@@ -2158,6 +2158,7 @@ const SHORTCUT_HANDLERS: Partial<Record<ShortcutId, () => void>> = {
     searchInput.focus()
     void runSearch()
   },
+  extractToNote: () => void extractSelectionToNote(),
   focusNextArea: () => {
     if (document.activeElement === searchInput) view.focus()
     else searchInput.focus()
@@ -2166,6 +2167,45 @@ const SHORTCUT_HANDLERS: Partial<Record<ShortcutId, () => void>> = {
     if (document.activeElement === searchInput) view.focus()
     else searchInput.focus()
   },
+}
+
+/// Splits the selection off into a note of its own, leaving a `[[link]]` behind.
+///
+/// The replacement goes through a normal editor transaction rather than being
+/// written around it, so the split lands on the undo stack as one step and
+/// triggers the ordinary save and restyle — the same reason the Mac routes it
+/// through `shouldChangeText`/`didChangeText` instead of mutating storage
+/// directly.
+///
+/// No naming prompt: the title comes from the selection's first line. This is
+/// meant to keep writing flowing, and a dialog in the middle of it would do the
+/// opposite — renaming afterwards is one keystroke away if the guess is wrong.
+async function extractSelectionToNote() {
+  const { from, to } = view.state.selection.main
+  if (from === to) return
+  const selected = view.state.sliceDoc(from, to)
+  if (!selected.trim()) return
+
+  let created: NoteDto
+  try {
+    created = await invoke<NoteDto>('extract_to_note', {
+      selection: selected,
+      inInbox: settings.newNotesStartInInbox,
+    })
+  } catch (err) {
+    console.error('could not extract the selection', err)
+    return
+  }
+
+  const link = `[[${created.title}]]`
+  view.dispatch({
+    changes: { from, to, insert: link },
+    // The cursor lands after the link, where writing would naturally carry on,
+    // rather than leaving the whole link selected.
+    selection: { anchor: from + link.length },
+  })
+  view.focus()
+  await runSearch()
 }
 
 window.addEventListener('keydown', (e) => {

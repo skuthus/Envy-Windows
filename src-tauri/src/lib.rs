@@ -207,6 +207,36 @@ fn create_note(title: String, state: State<AppState>) -> Result<NoteDto, String>
         .map_err(|e| e.to_string())
 }
 
+/// Splits a selection off into a note of its own, returning it so the caller
+/// can leave a `[[link]]` where the text used to be.
+///
+/// `in_inbox` follows wherever new notes go, so extracting obeys the same
+/// setting as writing one from scratch.
+#[tauri::command]
+fn extract_to_note(
+    selection: String,
+    in_inbox: bool,
+    state: State<AppState>,
+) -> Result<NoteDto, String> {
+    let (title, body) = NoteStore::extracted_title_and_body(&selection);
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    let mut note = if in_inbox {
+        store.create_inbox_note(&title)
+    } else {
+        store.create(&title)
+    }
+    .map_err(|e| e.to_string())?;
+    // Saved only when there is something to save — an extraction whose title
+    // used up the whole selection leaves a note with just its name, and writing
+    // an empty body over that is pointless work.
+    if !body.is_empty() {
+        note.set_content(body);
+        store.save(&note).map_err(|e| e.to_string())?;
+    }
+    Ok(NoteDto::from_note(&note, true))
+}
+
 /// Follows a `[[wiki-link]]`, creating the target note if it doesn't exist —
 /// which is most of what makes linking feel immediate rather than clerical.
 #[tauri::command]
@@ -1334,6 +1364,7 @@ pub fn run() {
             resolve_title,
             save_note,
             create_note,
+            extract_to_note,
             open_link,
             rename_note,
             delete_note,
