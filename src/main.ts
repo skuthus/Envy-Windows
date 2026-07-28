@@ -1834,7 +1834,7 @@ function containsSearchOperator(query: string): boolean {
     .some((raw) => {
       const w = raw.toLowerCase()
       return (
-        /^-?(tag|date|due|link|template|trash|inbox|ai):/.test(w) ||
+        /^-?(tag|date|stale|due|link|template|trash|inbox|ai):/.test(w) ||
         w === 'orphan:' ||
         w === 'linked:' ||
         w === 'todo:' ||

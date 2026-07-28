@@ -357,13 +357,26 @@ function tokenizeQuery(q: string): string[] {
   return out
 }
 
+/// Operators that name nothing a note's text actually contains.
+///
+/// They filter on when a note was touched, where it sits, what points at it,
+/// whether it has an unfinished task — none of which is written anywhere in
+/// the prose. Highlighting them would light up the literal word in any note
+/// unlucky enough to contain it: a note mentioning "todo:" would glow for a
+/// `todo:` search that matched it for an entirely different reason.
+///
+/// `tag:` is deliberately absent. A tag *is* in the text, so it is handled
+/// below by highlighting the matched part of each qualifying `#tag`.
+const NON_LITERAL_OPERATORS =
+  /^(date|stale|due|link|todo|ai|inbox|template|trash|orphan|linked):/
+
 /// Ranges in `text` that the query matches, for highlighting.
 ///
 /// Each word highlights independently: a scattered multi-word AND search has
 /// no single contiguous phrase to find in the first place. Operators that name
-/// nothing literal in a note's text — `date:`, `due:`, `link:`, `orphan:` —
-/// highlight nothing, because there is nothing in the prose that corresponds
-/// to them.
+/// nothing literal in a note's text highlight nothing, because there is
+/// nothing in the prose that corresponds to them — see
+/// `NON_LITERAL_OPERATORS`.
 function searchMatchRanges(text: string, query: string): Array<[number, number]> {
   const trimmed = query.trim()
   if (!trimmed || !text) return []
@@ -389,24 +402,21 @@ function searchMatchRanges(text: string, query: string): Array<[number, number]>
 
   for (const token of tokenizeQuery(trimmed)) {
     const lowered = token.toLowerCase()
-    if (
-      lowered.startsWith('link:') ||
-      lowered.startsWith('-link:') ||
-      lowered === 'orphan:' ||
-      lowered === 'linked:' ||
-      lowered.startsWith('date:') ||
-      lowered.startsWith('due:')
-    ) {
-      continue
-    }
+    // An exclusion highlights nothing — the same rule the quoted branch below
+    // states and applies. It holds for every kind: `-oranges`, `-tag:x`,
+    // `-due:overdue`. Without this they fell through to the literal branch and
+    // were searched for verbatim, hyphen and all.
+    if (lowered.startsWith('-') && lowered.length > 1) continue
+    if (NON_LITERAL_OPERATORS.test(lowered)) continue
 
-    if (token.startsWith('"') || token.startsWith('-"')) {
-      // An exclusion highlights nothing. A *closed* quote matched on word
-      // boundaries, so it highlights on word boundaries too — otherwise
-      // "nee" would light up inside "needed" in a note that only matched the
-      // whole word. An open, still-being-typed quote highlights as the
-      // substring it matched as.
-      if (token.startsWith('-')) continue
+    if (token.startsWith('"')) {
+      // A *closed* quote matched on word boundaries, so it highlights on word
+      // boundaries too — otherwise "nee" would light up inside "needed" in a
+      // note that only matched the whole word. An open, still-being-typed
+      // quote highlights as the substring it matched as.
+      //
+      // `-"phrase"` no longer reaches here: the exclusion check above catches
+      // every kind of exclusion, this one included.
       const phrase = token.replace(/^"/, '').replace(/"$/, '')
       if (!phrase) continue
       if (token.length >= 2 && token.endsWith('"')) {

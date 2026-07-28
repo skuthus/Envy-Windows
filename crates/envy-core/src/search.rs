@@ -203,6 +203,39 @@ fn date_range(query: &str, ctx: &SearchContext) -> Option<(DateTime<Local>, Date
     }
 }
 
+/// The cutoff for `stale:` — notes untouched since this instant are stale.
+///
+/// `stale:` is `date:`'s complement: where `date:` asks what was edited inside
+/// a window, this asks what hasn't been edited since one. Bare `stale:` means
+/// six months, long enough that whatever it surfaces is genuinely out of mind
+/// rather than merely last week's work.
+///
+/// `None` for a value that isn't a recognized period, which the filter treats
+/// as "no constraint" — the same lenient fallback `date:` takes, so a typo
+/// shows everything rather than an unexplained empty list.
+fn stale_cutoff(query: &str, ctx: &SearchContext) -> Option<DateTime<Local>> {
+    let v = query.trim().to_lowercase();
+    let now = ctx.now;
+    if v.is_empty() {
+        return Some(now - Duration::days(182));
+    }
+    match v.as_str() {
+        "week" => Some(now - Duration::days(7)),
+        "month" => Some(now - Duration::days(30)),
+        "year" => Some(now - Duration::days(365)),
+        _ => {
+            // A bare number of days, with an optional "d" — `stale:90` and
+            // `stale:90d` are the same question.
+            let digits = v.strip_suffix('d').unwrap_or(&v);
+            let days: i64 = digits.parse().ok()?;
+            if days <= 0 {
+                return None;
+            }
+            Some(now - Duration::days(days))
+        }
+    }
+}
+
 /// The `[start, end)` window a `due:` bucket resolves to.
 ///
 /// Deliberately separate from `date_range`: `date:week`/`date:month` look
@@ -292,6 +325,9 @@ struct GroupQuery {
     tag: Option<String>,
     exclude_tags: Vec<String>,
     date: Option<(DateTime<Local>, DateTime<Local>)>,
+    /// Notes untouched since this instant. `date:`'s complement.
+    stale: Option<DateTime<Local>>,
+    exclude_stale: Option<DateTime<Local>>,
     due: Option<DueCondition>,
     exclude_due: Option<DueCondition>,
     /// An unrecognized `due:` value ("due:cats") means *match nothing*, not
@@ -332,6 +368,8 @@ impl GroupQuery {
             || self.tag.is_some()
             || !self.exclude_tags.is_empty()
             || self.date.is_some()
+            || self.stale.is_some()
+            || self.exclude_stale.is_some()
             || self.due.is_some()
             || self.exclude_due.is_some()
             || self.due_invalid
@@ -381,6 +419,16 @@ impl GroupQuery {
             } else if let Some(rest) = t.strip_prefix("date:") {
                 if q.date.is_none() {
                     q.date = date_range(rest, ctx);
+                }
+            // Checked before the bare form, or "-stale:week" would be read as a
+            // free term beginning with a minus.
+            } else if let Some(rest) = t.strip_prefix("-stale:") {
+                if q.exclude_stale.is_none() {
+                    q.exclude_stale = stale_cutoff(rest, ctx);
+                }
+            } else if let Some(rest) = t.strip_prefix("stale:") {
+                if q.stale.is_none() {
+                    q.stale = stale_cutoff(rest, ctx);
                 }
             } else if let Some(rest) = t.strip_prefix("-due:") {
                 if !exclude_due_seen {
@@ -558,6 +606,17 @@ fn matched<'a>(notes: &'a [Note], group: &str, ctx: &SearchContext) -> Vec<(&'a 
             if let Some((start, end)) = q.date {
                 let m = modified_datetime(note)?;
                 if !(m >= start && m < end) {
+                    return None;
+                }
+            }
+            // `stale:` is `date:`'s complement — untouched *since* the cutoff.
+            if let Some(cutoff) = q.stale {
+                if modified_datetime(note)? >= cutoff {
+                    return None;
+                }
+            }
+            if let Some(cutoff) = q.exclude_stale {
+                if modified_datetime(note)? < cutoff {
                     return None;
                 }
             }
@@ -926,6 +985,79 @@ mod tests {
         ];
         assert_eq!(titles(&notes, "date:today"), vec!["Recent"]);
         assert_eq!(titles(&notes, "date:week"), vec!["Recent"]);
+    }
+
+    /// Three ages, so every `stale:` period has something on each side of it.
+    fn aged_notes() -> Vec<Note> {
+        let day = 60 * 60 * 24;
+        let at = |days: u64| SystemTime::from(ctx().now) - StdDuration::from_secs(day * days);
+        vec![
+            Note::new("C:/Index/Fresh.md", "x", at(2)),
+            Note::new("C:/Index/Middling.md", "x", at(60)),
+            Note::new("C:/Index/Ancient.md", "x", at(400)),
+        ]
+    }
+
+    #[test]
+    fn bare_stale_is_six_months() {
+        let notes = aged_notes();
+        // 60 days is not yet stale at six months; 400 is.
+        assert_eq!(titles(&notes, "stale:"), vec!["Ancient"]);
+    }
+
+    #[test]
+    fn stale_periods_narrow_the_window() {
+        let notes = aged_notes();
+        let mut week = titles(&notes, "stale:week");
+        week.sort();
+        assert_eq!(week, vec!["Ancient", "Middling"]);
+
+        let mut month = titles(&notes, "stale:month");
+        month.sort();
+        assert_eq!(month, vec!["Ancient", "Middling"]);
+
+        assert_eq!(titles(&notes, "stale:year"), vec!["Ancient"]);
+    }
+
+    #[test]
+    fn stale_accepts_a_number_of_days() {
+        let notes = aged_notes();
+        let mut got = titles(&notes, "stale:30");
+        got.sort();
+        assert_eq!(got, vec!["Ancient", "Middling"]);
+        // The trailing "d" is the same question.
+        let mut with_d = titles(&notes, "stale:30d");
+        with_d.sort();
+        assert_eq!(with_d, got);
+        assert_eq!(titles(&notes, "stale:365"), vec!["Ancient"]);
+    }
+
+    #[test]
+    fn stale_exclusion_keeps_the_recently_touched() {
+        let notes = aged_notes();
+        assert_eq!(titles(&notes, "-stale:year"), vec!["Fresh", "Middling"]);
+    }
+
+    /// Follows `date:` rather than `due:`: an unrecognized period is a typo, and
+    /// showing everything beats an unexplained empty list.
+    #[test]
+    fn invalid_stale_value_shows_everything() {
+        let notes = aged_notes();
+        assert_eq!(titles(&notes, "stale:cats").len(), 3);
+        assert_eq!(titles(&notes, "stale:0").len(), 3);
+    }
+
+    /// The pairing the release notes single out: disconnected *and* forgotten.
+    #[test]
+    fn stale_composes_with_orphan() {
+        let day = 60 * 60 * 24;
+        let at = |days: u64| SystemTime::from(ctx().now) - StdDuration::from_secs(day * days);
+        let notes = vec![
+            Note::new("C:/Index/Old Orphan.md", "nothing links here", at(400)),
+            Note::new("C:/Index/Old Linked.md", "see [[Hub]]", at(400)),
+            Note::new("C:/Index/Fresh Orphan.md", "alone", at(1)),
+        ];
+        assert_eq!(titles(&notes, "orphan: stale:"), vec!["Old Orphan"]);
     }
 
     #[test]
