@@ -6,6 +6,10 @@
 
 import markupGroups from './markup-help.json'
 import { EMOJI_SHORTCODES } from './emoji'
+// The application icon itself, not a copy or a redrawing of it. About is where
+// someone looks to confirm what they are running, so showing anything other
+// than the real mark is the one place it actually matters.
+import appIcon from '../src-tauri/icons/128x128@2x.png'
 
 interface MarkupEntry {
   syntax: string
@@ -162,7 +166,13 @@ function renderEmoji(): HTMLElement {
 
 function renderAbout(version: string): HTMLElement {
   const root = el('div', 'reference-body about')
-  root.append(el('div', 'about-mark'))
+  const mark = document.createElement('img')
+  mark.className = 'about-mark'
+  mark.src = appIcon
+  mark.alt = 'Envy'
+  mark.width = 88
+  mark.height = 88
+  root.append(mark)
   root.append(el('h3', '', 'Envy for Windows'))
   root.append(el('p', 'reference-desc', 'A flat-file, frictionless note-taking application.'))
   root.append(el('p', 'reference-desc', `Version ${version}`))

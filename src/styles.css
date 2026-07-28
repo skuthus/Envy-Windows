@@ -1021,36 +1021,22 @@ body.popover {
 .reference-body.about .reference-desc { margin: 2px 0; }
 /* The app mark, drawn from the same five flat shapes as the icon rather than
    loaded as an image — one source of geometry, and it scales cleanly. */
+/* The real application icon, imported as a file rather than rebuilt in CSS.
+   The previous version drew the mark by hand out of a rounded box, a border-top
+   arc and a ring-shadowed circle — and it had no eye. The mark is an eye: a red
+   brow above a cream almond holding a green iris. Without the almond, all that
+   was left was a red slash over a green dot on near-black, which is not the
+   logo and reads like something else entirely.
+
+   Using the icon file means it cannot drift from what the taskbar and the
+   installer show, which for the one screen whose job is to say what you are
+   running is the whole point. */
 .about-mark {
+  display: block;
   width: 88px;
   height: 88px;
   margin: 0 auto;
   border-radius: 22.37%;
-  background: #282520;
-  position: relative;
-  overflow: hidden;
-}
-.about-mark::before {
-  content: '';
-  position: absolute;
-  left: 7.8%;
-  right: 7.8%;
-  top: 18%;
-  height: 22%;
-  border-radius: 50%;
-  border-top: 11% solid #ff4b39;
-}
-.about-mark::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 56.6%;
-  width: 27.3%;
-  height: 27.3%;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  background: #30d158;
-  box-shadow: 0 0 0 0.6em #fafaf8 inset, 0 0 0 3.2em rgba(0, 0, 0, 0) inset;
 }
 
 /* --- Settings --------------------------------------------------------------- */
