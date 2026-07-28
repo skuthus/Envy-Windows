@@ -985,6 +985,51 @@ fn build_tray_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, Box<dyn s
     )?)
 }
 
+/// Writes the verified installer to a temp file and starts it *after* this
+/// process has had a few seconds to disappear.
+///
+/// The delay is the whole point, and it exists because of a bug that shipped.
+/// `download_and_install` launches the installer and immediately calls
+/// `std::process::exit(0)`, so the two race. The installer runs passive, and
+/// its check for a running Envy only kills-and-waits when it actually *finds*
+/// one — mid-exit it frequently finds nothing and goes straight to copying.
+/// The copy then hits an executable Windows still has locked, and because the
+/// generated NSIS script sets no `SetOverwrite`, the default `AllowSkipFiles`
+/// means a silent install *skips the unwritable file and carries on*. No error,
+/// no abort. The script then writes the registry with the new version.
+///
+/// The result is an install that reports success while leaving the old binary
+/// in place, so the app offers the same update on every launch, forever.
+/// Observed twice on a real install: registry 0.1.3, binary 0.1.2.
+///
+/// Waiting removes the race rather than narrowing it. `ping` rather than
+/// `timeout`, because `timeout` reads the console and fails outright when there
+/// is not one — which is exactly the case for a detached process.
+fn launch_installer_after_exit(bytes: &[u8], version: &str) -> std::io::Result<()> {
+    let installer = std::env::temp_dir().join(format!("Envy_{version}_x64-setup.exe"));
+    std::fs::write(&installer, bytes)?;
+
+    // `/P /R` is passive-with-restart, the same pair Tauri's own passive mode
+    // passes, and `/UPDATE` tells the script this is an upgrade rather than a
+    // fresh install.
+    let mut command = std::process::Command::new("cmd");
+    command.arg("/C").arg(format!(
+        "ping -n 5 127.0.0.1 >nul & \"{}\" /P /R /UPDATE",
+        installer.display()
+    ));
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Detached so it outlives this process, and windowless so the wait
+        // doesn't flash a console over whatever the user is doing.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        command.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+    }
+    command.spawn()?;
+    Ok(())
+}
+
 /// Looks for a newer release and, if the user agrees, installs it and restarts.
 ///
 /// `manual` is the difference between the check the app runs at launch and the
@@ -1028,8 +1073,22 @@ async fn run_update_check(app: tauri::AppHandle, manual: bool) {
                 // No progress or total-length handling: this is a ~10MB
                 // download, and a progress bar is worth building when there is
                 // somewhere in the interface to put one.
-                match update.download_and_install(|_, _| {}, || {}).await {
-                    Ok(()) => app.restart(),
+                // Downloaded and launched in two steps rather than through
+                // `download_and_install`, which does both and cannot be made to
+                // wait. See `launch_installer_after_exit`.
+                //
+                // `download` is where the signature is checked, so nothing is
+                // weakened by taking the bytes and running the installer here —
+                // they arrive already verified against the key compiled into
+                // this build.
+                let staged = match update.download(|_, _| {}, || {}).await {
+                    Ok(bytes) => launch_installer_after_exit(&bytes, &version)
+                        .map_err(|e| e.to_string()),
+                    Err(e) => Err(e.to_string()),
+                };
+                match staged {
+                    // The installer is waiting for this process to go away.
+                    Ok(()) => app.exit(0),
                     Err(e) => {
                         app.dialog()
                             .message(format!("The update could not be installed.\n\n{e}"))
