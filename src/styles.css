@@ -418,6 +418,17 @@ body.bold-file-list .row-date { font-weight: 700; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The folder a note is filed in, when that folder has been given a colour. Same
+   size and slot as the fleeting dot, because a note only ever shows one: an
+   inbox note keeps amber, since "unfiled" outranks a folder category. */
+.folder-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
 .inbox-dot {
   display: inline-block;
   width: 6px;
@@ -442,6 +453,46 @@ body.bold-file-list .row-date { font-weight: 700; }
 .row .pin-mark,
 .row .inbox-dot,
 .row .trash-mark { line-height: 1; }
+
+/* --- Folder colours --------------------------------------------------------
+   One row per folder: its name, then the palette. The chosen swatch is ringed
+   rather than ticked, since the swatch itself is the value. */
+#folder-colors-empty.hidden { display: none; }
+#folder-colors h4 {
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--envy-blockquote);
+}
+.folder-color-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 0;
+}
+.folder-color-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.folder-swatch {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: default;
+}
+.folder-swatch.active { border-color: var(--envy-text); }
+.folder-swatch.none {
+  background: none;
+  border: 1px dashed color-mix(in srgb, var(--envy-marker) 70%, transparent);
+}
+.folder-swatch.none.active { border: 2px solid var(--envy-text); }
 
 #settings-panel .setting-note {
   margin: 6px 0 0;
@@ -782,7 +833,10 @@ body.popover {
 #context-menu.hidden { display: none; }
 
 .context-item {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  position: relative;
   width: 100%;
   text-align: left;
   font: inherit;
@@ -796,6 +850,52 @@ body.popover {
   white-space: nowrap;
 }
 .context-item:hover { background: var(--envy-selection); }
+
+/* --- Submenus ---------------------------------------------------------------
+   Nested rather than a second floating layer, so it inherits the menu's own
+   look and closes with it. It hangs off the right edge and flips to the left
+   when there isn't room — the same rule the menu itself follows. */
+.context-item.has-submenu::after {
+  content: '›';
+  margin-left: auto;
+  padding-left: 10px;
+  opacity: 0.6;
+}
+.context-submenu {
+  position: absolute;
+  top: -5px;
+  left: 100%;
+  z-index: 21;
+  min-width: 170px;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 4px;
+  border-radius: 8px;
+  background: var(--envy-title-bar-background);
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+.context-submenu.hidden { display: none; }
+.context-submenu.flip { left: auto; right: 100%; }
+
+.context-separator {
+  height: 1px;
+  margin: 4px 6px;
+  background: color-mix(in srgb, var(--envy-marker) 45%, transparent);
+}
+
+/* The colour of the folder an item files into. Always present, even when the
+   folder has none, so the labels line up either way. */
+.context-swatch {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.context-swatch.empty {
+  background: none;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 60%, transparent);
+}
 /* The destructive entry is coloured, not separated by a divider — one
    irreversible item in a list of six reads better marked than fenced off. */
 .context-item.destructive { color: var(--envy-due-overdue); }

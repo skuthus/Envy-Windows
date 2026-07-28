@@ -108,6 +108,86 @@ impl NoteStore {
         self.create_in(title, self.directory.clone())
     }
 
+    /// The folder this note sits in, relative to the Index root, or `None` for
+    /// a note at the root.
+    ///
+    /// `Inbox/` also returns `None`: a fleeting note already has its own amber
+    /// dot, and "unfiled" outranks a folder category, so it never wears a
+    /// folder colour instead.
+    pub fn subfolder_path(&self, note: &Note) -> Option<String> {
+        subfolder_path(note, &self.directory)
+    }
+
+    /// Every folder under the Index that could hold notes, relative to the
+    /// root, sorted.
+    ///
+    /// `Templates/` and `Inbox/` are excluded along with everything beneath
+    /// them — neither is a place you file a note, and both already mean
+    /// something else. Hidden folders are skipped wholesale, which is what
+    /// keeps `.trash` out without needing its own case.
+    pub fn subfolders(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        fn walk(dir: &Path, root: &Path, out: &mut Vec<String>) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                let is_dir = match entry.file_type() {
+                    Ok(t) if t.is_symlink() => path.is_dir(),
+                    Ok(t) => t.is_dir(),
+                    Err(_) => path.is_dir(),
+                };
+                if !is_dir || is_hidden(&path) {
+                    continue;
+                }
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                if name == TEMPLATES_FOLDER_NAME || name == INBOX_FOLDER_NAME {
+                    continue;
+                }
+                if let Ok(rel) = path.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+                walk(&path, root, out);
+            }
+        }
+        walk(&self.directory, &self.directory, &mut out);
+        out.sort();
+        out
+    }
+
+    /// Moves a note into `subfolder` (relative to the Index root), or to the
+    /// root when it is `None` or empty. Creates the destination on demand.
+    ///
+    /// The title is unchanged, so `[[links]]` pointing at it still resolve —
+    /// this only changes which folder the file sits in. Returns the note at its
+    /// new location, or `None` if the move failed. A note already in that
+    /// folder is returned untouched rather than treated as an error.
+    pub fn move_note(&mut self, id: &str, subfolder: Option<&str>) -> Option<Note> {
+        let note = self.notes.iter().find(|n| n.id() == id)?.clone();
+        let trimmed = subfolder.unwrap_or("").trim_matches(['/', ' ']);
+        let target_dir = if trimmed.is_empty() {
+            self.directory.clone()
+        } else {
+            self.directory.join(trimmed)
+        };
+        if note.url().parent() == Some(target_dir.as_path()) {
+            return Some(note);
+        }
+
+        fs::create_dir_all(&target_dir).ok()?;
+        // The same disambiguation a new note gets, so moving onto a name that
+        // is taken in the destination doesn't clobber it.
+        let destination = target_dir.join(unique_filename(note.title(), &target_dir));
+        fs::rename(note.url(), &destination).ok()?;
+
+        let moved = Note::new(destination, note.content().to_string(), note.modified);
+        if let Some(i) = self.notes.iter().position(|n| n.id() == id) {
+            self.notes[i] = moved.clone();
+        }
+        Some(moved)
+    }
+
     /// Splits a selection into the title and body of the note it becomes — the
     /// "one idea per note" move, applied to text already written.
     ///
@@ -469,6 +549,22 @@ fn apply_template_tokens(text: &str, title: &str, date_text: &str, time_text: &s
         .replace("{{title}}", title)
 }
 
+/// The folder `note` sits in, relative to `root`, or `None` at the root.
+///
+/// A free function as well as a method because most callers hold the store
+/// mutably at the point they need this and cannot borrow it again.
+pub fn subfolder_path(note: &Note, root: &Path) -> Option<String> {
+    let parent = note.url().parent()?;
+    let relative = parent.strip_prefix(root).ok()?;
+    if relative.as_os_str().is_empty() {
+        return None;
+    }
+    // Separators are normalised so a stored colour keys the same whichever way
+    // the path was built — the key is a plain relative path, not a platform one.
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    (relative != INBOX_FOLDER_NAME).then_some(relative)
+}
+
 /// Drops a leading heading/bullet/quote/number/checkbox marker from a line, so
 /// extracting "## Ideas" or "- [ ] Ship it" names the note for what it says
 /// rather than for the punctuation in front of it.
@@ -686,6 +782,100 @@ mod tests {
     use chrono::NaiveDate;
     use tempfile::TempDir;
 
+    #[test]
+    fn subfolders_exclude_the_folders_that_already_mean_something() {
+        let (dir, store) = store_with(&[
+            ("Root.md", "x"),
+            ("Projects/A.md", "x"),
+            ("Projects/Work/B.md", "x"),
+            ("Templates/T.md", "x"),
+            ("Inbox/Fleeting.md", "x"),
+            (".trash/Gone.md", "x"),
+        ]);
+        let _ = &dir;
+        assert_eq!(store.subfolders(), vec!["Projects", "Projects/Work"]);
+    }
+
+    #[test]
+    fn subfolder_path_is_relative_and_skips_inbox() {
+        let (dir, store) = nested_store_with(&[
+            ("Root.md", "x"),
+            ("Projects/Work/Deep.md", "x"),
+            ("Inbox/Fleeting.md", "x"),
+        ]);
+        let _ = &dir;
+        let by = |t: &str| store.notes().iter().find(|n| n.title() == t).unwrap().clone();
+        assert_eq!(store.subfolder_path(&by("Root")), None);
+        assert_eq!(
+            store.subfolder_path(&by("Deep")),
+            Some("Projects/Work".to_string())
+        );
+        // A fleeting note keeps its own dot rather than wearing a folder colour.
+        assert_eq!(store.subfolder_path(&by("Fleeting")), None);
+    }
+
+    #[test]
+    fn moving_a_note_keeps_its_title_so_links_still_resolve() {
+        let (dir, mut store) = store_with(&[("Ideas.md", "body"), ("Hub.md", "see [[Ideas]]")]);
+        let id = store
+            .notes()
+            .iter()
+            .find(|n| n.title() == "Ideas")
+            .unwrap()
+            .id()
+            .to_string();
+
+        let moved = store.move_note(&id, Some("Projects")).unwrap();
+        assert_eq!(moved.title(), "Ideas");
+        assert_eq!(moved.content(), "body");
+        assert!(dir.path().join("Projects/Ideas.md").exists());
+        assert!(!dir.path().join("Ideas.md").exists());
+        assert_eq!(store.subfolder_path(&moved), Some("Projects".to_string()));
+
+        // Back to the root.
+        let back = store.move_note(moved.id(), None).unwrap();
+        assert_eq!(store.subfolder_path(&back), None);
+        assert!(dir.path().join("Ideas.md").exists());
+    }
+
+    #[test]
+    fn moving_into_the_same_folder_is_a_no_op() {
+        let (dir, mut store) = nested_store_with(&[("Projects/A.md", "x")]);
+        let _ = &dir;
+        let id = store.notes()[0].id().to_string();
+        let same = store.move_note(&id, Some("Projects")).unwrap();
+        assert_eq!(same.id(), id);
+    }
+
+    #[test]
+    fn moving_onto_a_taken_name_does_not_clobber_it() {
+        let (dir, mut store) =
+            nested_store_with(&[("A.md", "root copy"), ("Projects/A.md", "folder copy")]);
+        let root_id = store
+            .notes()
+            .iter()
+            .find(|n| n.url().parent() == Some(dir.path()))
+            .unwrap()
+            .id()
+            .to_string();
+        let moved = store.move_note(&root_id, Some("Projects")).unwrap();
+        assert_eq!(moved.content(), "root copy");
+        // The note already there is untouched.
+        assert_eq!(
+            fs::read_to_string(dir.path().join("Projects/A.md")).unwrap(),
+            "folder copy"
+        );
+    }
+
+    #[test]
+    fn moving_creates_the_destination_folder() {
+        let (dir, mut store) = store_with(&[("A.md", "x")]);
+        let id = store.notes()[0].id().to_string();
+        let moved = store.move_note(&id, Some("Brand/New")).unwrap();
+        assert!(dir.path().join("Brand/New").is_dir());
+        assert_eq!(store.subfolder_path(&moved), Some("Brand/New".to_string()));
+    }
+
     fn extracted(s: &str) -> (String, String) {
         NoteStore::extracted_title_and_body(s)
     }
@@ -761,6 +951,19 @@ mod tests {
             fs::write(&path, content).unwrap();
         }
         let store = NoteStore::open(dir.path(), false).unwrap();
+        (dir, store)
+    }
+
+    /// Same, but with subfolder scanning on — folder features are only
+    /// meaningful when notes inside folders are actually listed.
+    fn nested_store_with(files: &[(&str, &str)]) -> (TempDir, NoteStore) {
+        let dir = tempfile::tempdir().unwrap();
+        for (rel, content) in files {
+            let path = dir.path().join(rel);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, content).unwrap();
+        }
+        let store = NoteStore::open(dir.path(), true).unwrap();
         (dir, store)
     }
 

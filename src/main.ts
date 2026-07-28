@@ -70,6 +70,9 @@ interface NoteDto {
   isInbox: boolean
   aiProvenance: 'none' | 'created' | 'edited'
   hasUncheckedTask: boolean
+  /// The folder this note sits in, relative to the Index root, or null at the
+  /// root. What the list's folder dot is coloured by.
+  subfolder: string | null
 }
 
 const searchInput = document.getElementById('search') as HTMLInputElement
@@ -850,7 +853,13 @@ function listViewport(): number {
   return listEl.clientHeight || 600
 }
 
+/// Decoded once per render rather than per row. It is a JSON parse, and the
+/// list is the hottest thing in the app — the same reason the Mac caches its
+/// folder colours instead of decoding inside the row body.
+let folderColorCache: Record<string, string> = {}
+
 function renderList() {
+  folderColorCache = folderColors()
   results = applyPinning(sortNotes(results))
   // Whether the trailing value column is reserved at all. There is only one —
   // it shows whichever date the list is sorted by — and "Show date modified"
@@ -946,6 +955,14 @@ function buildRow(note: NoteDto, i: number): HTMLElement {
         const dot = document.createElement('span')
         dot.className = 'inbox-dot'
         dot.title = 'Fleeting note'
+        title.prepend(dot)
+      } else if (note.subfolder && folderColorCache[note.subfolder]) {
+        // Only when its folder has been given a colour, and never alongside the
+        // inbox dot — there is one slot, and "unfiled" outranks a folder.
+        const dot = document.createElement('span')
+        dot.className = 'folder-dot'
+        dot.style.background = folderColorCache[note.subfolder]
+        dot.title = `In ${note.subfolder}`
         title.prepend(dot)
       }
       if (note.id === trayPinnedId) {
@@ -1628,8 +1645,18 @@ const contextMenuEl = document.getElementById('context-menu')!
 
 interface MenuItemSpec {
   label: string
-  run: () => void | Promise<void>
+  /// Omitted for an item that only opens a submenu, and for a separator.
+  run?: () => void | Promise<void>
   destructive?: boolean
+  /// Turns this item into a submenu. Built lazily, on hover, because the only
+  /// one so far lists the Index's folders and walking the disk to fill a menu
+  /// nobody opened is work for nothing.
+  submenu?: () => MenuItemSpec[] | Promise<MenuItemSpec[]>
+  /// A horizontal rule rather than an item. The label is ignored.
+  separator?: boolean
+  /// A swatch drawn before the label — the colour of the folder an item files
+  /// into, so the menu reads the same way the list does.
+  swatch?: string | null
 }
 
 
@@ -1638,20 +1665,63 @@ function closeContextMenu() {
   contextMenuEl.replaceChildren()
 }
 
-function openContextMenu(x: number, y: number, items: MenuItemSpec[]) {
-  contextMenuEl.replaceChildren(
-    ...items.map((item) => {
-      const b = document.createElement('button')
-      b.type = 'button'
-      b.className = 'context-item' + (item.destructive ? ' destructive' : '')
-      b.textContent = item.label
-      b.onclick = () => {
-        closeContextMenu()
-        void item.run()
+/// Builds the rows for one menu level. Shared by the menu and its submenus, so
+/// a submenu looks and behaves like the menu it hangs off.
+function menuRows(items: MenuItemSpec[], onPick: () => void): HTMLElement[] {
+  return items.map((item) => {
+    if (item.separator) {
+      const hr = document.createElement('div')
+      hr.className = 'context-separator'
+      return hr
+    }
+    const b = document.createElement('button')
+    b.type = 'button'
+    b.className =
+      'context-item' +
+      (item.destructive ? ' destructive' : '') +
+      (item.submenu ? ' has-submenu' : '')
+    if (item.swatch !== undefined) {
+      const dot = document.createElement('span')
+      dot.className = 'context-swatch'
+      // A folder with no colour still gets the slot, so labels line up.
+      if (item.swatch) dot.style.background = item.swatch
+      else dot.classList.add('empty')
+      b.append(dot)
+    }
+    b.append(document.createTextNode(item.label))
+
+    if (item.submenu) {
+      const panel = document.createElement('div')
+      panel.className = 'context-submenu hidden'
+      b.append(panel)
+      let filled = false
+      b.onmouseenter = async () => {
+        if (!filled) {
+          filled = true
+          panel.replaceChildren(...menuRows(await item.submenu!(), onPick))
+        }
+        panel.classList.remove('hidden')
+        // Flip to the left when there isn't room on the right.
+        const r = panel.getBoundingClientRect()
+        panel.classList.toggle('flip', r.right > window.innerWidth)
       }
-      return b
-    }),
-  )
+      b.onmouseleave = () => panel.classList.add('hidden')
+      // A parent that only opens a submenu isn't itself clickable.
+      if (!item.run) b.onclick = (e) => e.stopPropagation()
+    }
+
+    if (item.run) {
+      b.onclick = () => {
+        onPick()
+        void item.run!()
+      }
+    }
+    return b
+  })
+}
+
+function openContextMenu(x: number, y: number, items: MenuItemSpec[]) {
+  contextMenuEl.replaceChildren(...menuRows(items, closeContextMenu))
   // Placed offscreen-but-measurable first: the size isn't known until the
   // items are in the DOM, and it's needed to decide whether to flip.
   contextMenuEl.classList.remove('hidden')
@@ -1676,6 +1746,140 @@ window.addEventListener('keydown', (e) => {
 })
 // Suppress the webview's own menu everywhere — this is an app, not a page.
 window.addEventListener('contextmenu', (e) => e.preventDefault())
+
+// --- Folders -----------------------------------------------------------------
+// A second axis alongside tags: a note lives in exactly one folder ("which
+// pile"), but can carry many tags ("what it's about").
+//
+// The folder itself is on disk and fully portable — it is just where the file
+// sits. The *colour* is a preference keyed by the folder's path relative to the
+// Index root, so nothing is ever written into a note, and the key survives the
+// Index being moved while still telling apart same-named folders at different
+// depths.
+
+/// The palette offered for folders, matching the Mac's presets exactly, so a
+/// coloured folder sits in the same family as tags and links.
+const FOLDER_PRESETS: Array<[string, string]> = [
+  ['Red', '#FF4B39'],
+  ['Orange', '#F5A623'],
+  ['Yellow', '#F5D423'],
+  ['Green', '#30D158'],
+  ['Blue', '#5A80FF'],
+  ['Purple', '#B46BFF'],
+  ['Pink', '#FF6FB0'],
+]
+
+function folderColors(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem('folderColors') ?? '{}') as Record<string, string>
+  } catch {
+    // A corrupted preference should cost the colours, not the folders.
+    return {}
+  }
+}
+
+function setFolderColor(folder: string, color: string | null) {
+  const all = folderColors()
+  if (color) all[folder] = color
+  else delete all[folder]
+  localStorage.setItem('folderColors', JSON.stringify(all))
+  renderList()
+  renderFolderColorSettings()
+}
+
+/// Settings → Folder Colors: one row per folder, with the palette and a way to
+/// clear it. Rebuilt on open rather than kept in step, since folders change from
+/// outside Envy as readily as from within.
+async function renderFolderColorSettings() {
+  const list = document.getElementById('folder-colors-list')!
+  const empty = document.getElementById('folder-colors-empty')!
+  if (!settings.includeSubfolders) {
+    list.replaceChildren()
+    empty.classList.remove('hidden')
+    return
+  }
+  let folders: string[] = []
+  try {
+    folders = await invoke<string[]>('list_subfolders')
+  } catch (err) {
+    console.error('could not list folders', err)
+  }
+  empty.classList.toggle('hidden', folders.length > 0)
+  if (!folders.length) {
+    empty.textContent = 'No subfolders yet. Right-click a note → Move to → New Folder…'
+    list.replaceChildren()
+    return
+  }
+
+  const colors = folderColors()
+  list.replaceChildren(
+    ...folders.map((folder) => {
+      const row = document.createElement('div')
+      row.className = 'folder-color-row'
+      const name = document.createElement('span')
+      name.className = 'folder-color-name'
+      name.textContent = folder
+      row.append(name)
+
+      for (const [label, hex] of FOLDER_PRESETS) {
+        const b = document.createElement('button')
+        b.type = 'button'
+        b.className = 'folder-swatch' + (colors[folder] === hex ? ' active' : '')
+        b.style.background = hex
+        b.title = label
+        b.onclick = () => setFolderColor(folder, hex)
+        row.append(b)
+      }
+      const clear = document.createElement('button')
+      clear.type = 'button'
+      clear.className = 'folder-swatch none' + (colors[folder] ? '' : ' active')
+      clear.title = 'No colour'
+      clear.onclick = () => setFolderColor(folder, null)
+      row.append(clear)
+      return row
+    }),
+  )
+}
+
+/// The "Move to" submenu: the Index root, every folder, and a way to make one.
+async function moveToItems(note: NoteDto): Promise<MenuItemSpec[]> {
+  let folders: string[] = []
+  try {
+    folders = await invoke<string[]>('list_subfolders')
+  } catch (err) {
+    console.error('could not list folders', err)
+  }
+  const colors = folderColors()
+  const move = (to: string | null) => async () => {
+    try {
+      await invoke<NoteDto>('move_note_to_subfolder', { id: note.id, subfolder: to })
+    } catch (err) {
+      console.error('could not move the note', err)
+      return
+    }
+    await runSearch()
+  }
+
+  const items: MenuItemSpec[] = [{ label: 'The Index', swatch: null, run: move(null) }]
+  if (folders.length) items.push({ label: '', separator: true })
+  for (const f of folders) {
+    // The folder a note is already in is shown but does nothing — moving it
+    // there is a no-op anyway, and hiding it makes the list look wrong.
+    items.push({ label: f, swatch: colors[f] ?? null, run: move(f) })
+  }
+  items.push({ label: '', separator: true })
+  items.push({
+    label: 'New Folder…',
+    run: async () => {
+      const name = window.prompt('New folder name')
+      if (!name?.trim()) return
+      // The move creates the folder on demand, so there is nothing to make
+      // first — this is a move to a name that does not exist yet.
+      await move(name.trim())()
+    },
+  })
+  return items
+}
 
 function noteMenuItems(note: NoteDto): MenuItemSpec[] {
   return [
@@ -1702,6 +1906,11 @@ function noteMenuItems(note: NoteDto): MenuItemSpec[] {
         titleEl.select()
       },
     },
+    // Only when subfolders are actually listed. Filing a note into a folder
+    // Envy then hides from the list would look like deleting it.
+    ...(settings.includeSubfolders
+      ? [{ label: 'Move to', submenu: () => moveToItems(note) } as MenuItemSpec]
+      : []),
     { label: 'Show in Explorer', run: () => invoke('reveal_note', { id: note.id }) },
     {
       label: 'Make This Note a Template',
@@ -2502,6 +2711,7 @@ function openSettings() {
   checkbox('setting-date').checked = settings.showDateModified
   checkbox('setting-due').checked = settings.showDueSort
   checkbox('setting-subfolders').checked = settings.includeSubfolders
+  void renderFolderColorSettings()
   checkbox('setting-focus-editor').checked = settings.moveFocusToEditorOnEnter
   checkbox('setting-inbox-new').checked = settings.newNotesStartInInbox
   checkbox('setting-inbox-in-list').checked = settings.showInboxInMainList
@@ -2812,6 +3022,9 @@ el<HTMLInputElement>('setting-subfolders').onchange = async (e) => {
   saveSetting('indexIncludeSubfolders', settings.includeSubfolders)
   await invoke('set_include_subfolders', { include: settings.includeSubfolders })
   await runSearch()
+  // Folder colours only mean anything once folders are listed, so the pane
+  // follows the toggle rather than waiting for Settings to be reopened.
+  await renderFolderColorSettings()
 }
 el<HTMLSelectElement>('setting-layout').onchange = (e) => {
   layoutMode = (e.target as HTMLSelectElement).value as LayoutMode

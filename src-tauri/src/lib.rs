@@ -39,11 +39,20 @@ pub struct NoteDto {
     ai_provenance: String,
     #[serde(rename = "hasUncheckedTask")]
     has_unchecked_task: bool,
+    /// The folder this note sits in, relative to the Index root, or null at the
+    /// root — what the list's folder dot is coloured by. Computed here rather
+    /// than derived from `id` in the frontend so the rule for it lives in one
+    /// place, next to the move that depends on it.
+    subfolder: Option<String>,
 }
 
 impl NoteDto {
-    fn from_note(note: &envy_core::Note, with_content: bool) -> Self {
+    /// `root` is the Index directory, needed for `subfolder`. Taken as a path
+    /// rather than the store because most callers are mid-mutation and cannot
+    /// lend it out again.
+    fn from_note(note: &envy_core::Note, with_content: bool, root: &Path) -> Self {
         Self {
+            subfolder: envy_core::subfolder_path(note, root),
             id: note.id().to_string(),
             title: note.title().to_string(),
             preview: note.preview().to_string(),
@@ -140,10 +149,11 @@ fn index_directory(state: State<AppState>) -> String {
 #[tauri::command]
 fn search(query: String, state: State<AppState>) -> Vec<NoteDto> {
     let store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     let ctx = SearchContext::now();
     envy_core::filtered(store.notes(), &query, &ctx)
         .into_iter()
-        .map(|n| NoteDto::from_note(n, false))
+        .map(|n| NoteDto::from_note(n, false, &root))
         .collect()
 }
 
@@ -155,19 +165,21 @@ fn search(query: String, state: State<AppState>) -> Vec<NoteDto> {
 #[tauri::command]
 fn resolve_title(title: String, state: State<AppState>) -> Option<NoteDto> {
     let store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     store
         .exact_title_match(&title)
-        .map(|n| NoteDto::from_note(n, true))
+        .map(|n| NoteDto::from_note(n, true, &root))
 }
 
 #[tauri::command]
 fn read_note(id: String, state: State<AppState>) -> Option<NoteDto> {
     let store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     store
         .notes()
         .iter()
         .find(|n| n.id() == id)
-        .map(|n| NoteDto::from_note(n, true))
+        .map(|n| NoteDto::from_note(n, true, &root))
 }
 
 /// Returns the saved note as the store now sees it.
@@ -184,6 +196,7 @@ fn read_note(id: String, state: State<AppState>) -> Option<NoteDto> {
 fn save_note(id: String, content: String, state: State<AppState>) -> Result<NoteDto, String> {
     state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     let Some(mut note) = store.notes().iter().find(|n| n.id() == id).cloned() else {
         return Err(format!("no note with id {id}"));
     };
@@ -193,7 +206,7 @@ fn save_note(id: String, content: String, state: State<AppState>) -> Result<Note
         .notes()
         .iter()
         .find(|n| n.id() == id)
-        .map(|n| NoteDto::from_note(n, false))
+        .map(|n| NoteDto::from_note(n, false, &root))
         .ok_or_else(|| format!("note {id} vanished during save"))
 }
 
@@ -201,9 +214,10 @@ fn save_note(id: String, content: String, state: State<AppState>) -> Result<Note
 fn create_note(title: String, state: State<AppState>) -> Result<NoteDto, String> {
     state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     store
         .create(&title)
-        .map(|n| NoteDto::from_note(&n, true))
+        .map(|n| NoteDto::from_note(&n, true, &root))
         .map_err(|e| e.to_string())
 }
 
@@ -221,6 +235,7 @@ fn extract_to_note(
     let (title, body) = NoteStore::extracted_title_and_body(&selection);
     state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     let mut note = if in_inbox {
         store.create_inbox_note(&title)
     } else {
@@ -234,7 +249,34 @@ fn extract_to_note(
         note.set_content(body);
         store.save(&note).map_err(|e| e.to_string())?;
     }
-    Ok(NoteDto::from_note(&note, true))
+    Ok(NoteDto::from_note(&note, true, &root))
+}
+
+/// Every folder under the Index a note could be filed into, for the "Move to"
+/// menu. Walked fresh each time the menu opens rather than cached — folders
+/// change from outside Envy as easily as from within it.
+#[tauri::command]
+fn list_subfolders(state: State<AppState>) -> Vec<String> {
+    state.store.lock().unwrap().subfolders()
+}
+
+/// Files a note into `subfolder`, or to the Index root when it is null.
+///
+/// A real file move, so the category is on disk and portable. The title is
+/// untouched, which is what keeps `[[links]]` pointing at it working.
+#[tauri::command]
+fn move_note_to_subfolder(
+    id: String,
+    subfolder: Option<String>,
+    state: State<AppState>,
+) -> Result<NoteDto, String> {
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
+    store
+        .move_note(&id, subfolder.as_deref())
+        .map(|n| NoteDto::from_note(&n, false, &root))
+        .ok_or_else(|| "could not move that note".to_string())
 }
 
 /// Follows a `[[wiki-link]]`, creating the target note if it doesn't exist —
@@ -243,9 +285,10 @@ fn extract_to_note(
 fn open_link(target: String, state: State<AppState>) -> Result<NoteDto, String> {
     state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     store
         .open_or_create_link(&target)
-        .map(|n| NoteDto::from_note(&n, true))
+        .map(|n| NoteDto::from_note(&n, true, &root))
         .map_err(|e| e.to_string())
 }
 
@@ -253,12 +296,13 @@ fn open_link(target: String, state: State<AppState>) -> Result<NoteDto, String> 
 fn rename_note(id: String, title: String, state: State<AppState>) -> Result<NoteDto, String> {
     state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     let Some(note) = store.notes().iter().find(|n| n.id() == id).cloned() else {
         return Err(format!("no note with id {id}"));
     };
     store
         .rename(&note, &title)
-        .map(|n| NoteDto::from_note(&n, true))
+        .map(|n| NoteDto::from_note(&n, true, &root))
         .map_err(|e| e.to_string())
 }
 
@@ -282,14 +326,13 @@ fn delete_note(id: String, state: State<AppState>) -> Result<(), String> {
 #[tauri::command]
 fn trashed_notes(fragment: String, state: State<AppState>) -> Vec<NoteDto> {
     let needle = fragment.trim().to_lowercase();
-    state
-        .store
-        .lock()
-        .unwrap()
+    let store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
+    store
         .trashed_notes()
         .iter()
         .filter(|n| needle.is_empty() || n.lowercased_title().contains(&needle))
-        .map(|n| NoteDto::from_note(n, true))
+        .map(|n| NoteDto::from_note(n, true, &root))
         .collect()
 }
 
@@ -297,12 +340,13 @@ fn trashed_notes(fragment: String, state: State<AppState>) -> Vec<NoteDto> {
 fn restore_from_trash(id: String, state: State<AppState>) -> Result<NoteDto, String> {
     state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     let Some(note) = store.trashed_notes().iter().find(|n| n.id() == id).cloned() else {
         return Err(format!("no trashed note with id {id}"));
     };
     store
         .restore_from_trash(&note)
-        .map(|n| NoteDto::from_note(&n, false))
+        .map(|n| NoteDto::from_note(&n, false, &root))
         .ok_or_else(|| "could not restore the note".to_string())
 }
 
@@ -428,10 +472,11 @@ fn delete_notes(ids: Vec<String>, state: State<AppState>) -> Result<usize, Strin
 fn restore_last_deleted(state: State<AppState>) -> Vec<NoteDto> {
     state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     store
         .restore_last_deleted()
         .iter()
-        .map(|n| NoteDto::from_note(n, false))
+        .map(|n| NoteDto::from_note(n, false, &root))
         .collect()
 }
 
@@ -476,6 +521,7 @@ fn create_note_from_template(
 ) -> Result<NoteDto, String> {
     state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     let Some(template) = store.templates().into_iter().find(|t| t.path.to_string_lossy() == path)
     else {
         return Err("no such template".to_string());
@@ -489,7 +535,7 @@ fn create_note_from_template(
             &now.format(&date_pattern_to_strftime(&pattern)).to_string(),
             &now.format("%-I:%M %p").to_string(),
         )
-        .map(|n| NoteDto::from_note(&n, true))
+        .map(|n| NoteDto::from_note(&n, true, &root))
         .map_err(|e| e.to_string())
 }
 
@@ -548,12 +594,13 @@ fn inbox_count(state: State<AppState>) -> usize {
 fn submit_from_inbox(id: String, state: State<AppState>) -> Result<NoteDto, String> {
     state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     let Some(note) = store.notes().iter().find(|n| n.id() == id).cloned() else {
         return Err(format!("no note with id {id}"));
     };
     store
         .submit_from_inbox(&note)
-        .map(|n| NoteDto::from_note(&n, true))
+        .map(|n| NoteDto::from_note(&n, true, &root))
         .ok_or_else(|| "that note is not in the Inbox".to_string())
 }
 
@@ -561,9 +608,10 @@ fn submit_from_inbox(id: String, state: State<AppState>) -> Result<NoteDto, Stri
 fn create_inbox_note(title: String, state: State<AppState>) -> Result<NoteDto, String> {
     state.mark_internal_write();
     let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
     store
         .create_inbox_note(&title)
-        .map(|n| NoteDto::from_note(&n, true))
+        .map(|n| NoteDto::from_note(&n, true, &root))
         .map_err(|e| e.to_string())
 }
 
@@ -1365,6 +1413,8 @@ pub fn run() {
             save_note,
             create_note,
             extract_to_note,
+            list_subfolders,
+            move_note_to_subfolder,
             open_link,
             rename_note,
             delete_note,
