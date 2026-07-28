@@ -516,11 +516,16 @@ body.bold-file-list .row-date { font-weight: 700; }
   flex-direction: column;
 }
 
+/* Wraps rather than scrunching. A run of pills — the due chip and however many
+   tags a note carries — keeps every pill full size and stacks onto another row
+   when the bar runs out of width, so the bar grows taller instead of the pills
+   shrinking to stay on one line. The Mac added a FlowLayout for exactly this. */
 #note-title-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 6px 12px;
   padding: 6px 28px;
   font-size: 13px;
   font-weight: 600;
@@ -1179,8 +1184,17 @@ body.popover {
 
 /* Tags beside the note title. Clickable, because a tag you can see and can't
    search on is a dead end. */
+/* The tag chips are their own flow inside the bar, so a note with many tags
+   wraps within the chip run rather than pushing the due pill onto its own row
+   first. */
+#note-tags {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
 .title-tag {
-  margin-left: 6px;
   font-size: 11px;
   cursor: default;
 }

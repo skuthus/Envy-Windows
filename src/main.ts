@@ -577,17 +577,76 @@ function renderDueBadge(due: string | null) {
 /// Tags of the open note, shown beside its title. Off by default — the tags
 /// are already visible in the text, so this is for people who want them
 /// summarised rather than hunted for.
+// --- Tag colours -------------------------------------------------------------
+// Like a folder's colour, this is a *preference*, not note content. The `#tag`
+// in the file is the truth and stays exactly as portable as before; the tint is
+// presentation, the way the theme is. Open the vault in another editor and the
+// tag still categorises exactly as it did — only the colour, which was never in
+// the file, is absent.
+//
+// The colour belongs to the tag *name*, so every note carrying it shows the
+// same one. That is the line that stops coloured tags becoming hidden per-note
+// state attached to a note behind its back.
+
+function tagColors(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem('tagColors') ?? '{}') as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+function setTagColor(tag: string, color: string | null) {
+  const all = tagColors()
+  if (color) all[tag] = color
+  else delete all[tag]
+  localStorage.setItem('tagColors', JSON.stringify(all))
+  const open = results.find((n) => n.id === openNoteId)
+  renderTitleBarTags(open?.tags ?? [])
+}
+
+function tagColorMenu(tag: string): MenuItemSpec[] {
+  const current = tagColors()[tag]
+  const items: MenuItemSpec[] = FOLDER_PRESETS.map(([label, hex]) => ({
+    label,
+    swatch: hex,
+    run: () => setTagColor(tag, hex),
+  }))
+  if (current) {
+    items.push({ label: '', separator: true })
+    items.push({
+      label: 'Remove Color',
+      destructive: true,
+      run: () => setTagColor(tag, null),
+    })
+  }
+  return items
+}
+
 function renderTitleBarTags(tags: string[]) {
   tagsEl.replaceChildren()
   if (!settings.showTagsInTitleBar || tags.length === 0) return
+  const colors = tagColors()
   for (const t of tags) {
     const el = document.createElement('span')
     el.className = 'envy-tag title-tag'
     el.textContent = `#${t}`
-    el.title = `Search tag:${t}`
+    el.title = `Search tag:${t} — right-click to colour it`
+    const tint = colors[t]
+    if (tint) {
+      // A tinted tag paints its own translucent capsule from its colour, so it
+      // reads as that colour without needing a second theme entry. An untinted
+      // one keeps the theme's ordinary tag background untouched.
+      el.style.color = tint
+      el.style.background = `color-mix(in srgb, ${tint} 18%, transparent)`
+    }
     el.onclick = () => {
       searchInput.value = `tag:${t}`
       void runSearch()
+    }
+    el.oncontextmenu = (e) => {
+      e.preventDefault()
+      openContextMenu(e.clientX, e.clientY, tagColorMenu(t))
     }
     tagsEl.append(el)
   }
