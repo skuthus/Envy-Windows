@@ -1280,6 +1280,17 @@ body.popover {
   border-radius: 2px;
 }
 
+/* `==highlight==` deliberately reuses the search-match colour rather than
+   taking a theme entry of its own — one "highlight" concept for everything in
+   the editor, which is the same reasoning the external-edit flash below
+   follows. A marked word that is also a search match therefore just stays
+   marked, rather than one of them winning. */
+.envy-highlight-mark {
+  background: var(--envy-highlight);
+  color: var(--envy-highlight-text) !important;
+  border-radius: 2px;
+}
+
 /* --- External-edit flash --------------------------------------------------
    The same highlight token search matches use — one "highlight" concept for
    everything in the editor rather than a second hardcoded colour.

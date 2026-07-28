@@ -1438,6 +1438,7 @@ no proprietary format. Open them in anything.
 ## Try it
 
 - **Bold**, *italic*, ~~struck through~~, and `code` all render as you type.
+- ==highlight== marks text with a background, like ==this==.
 - Link notes with [[Another Note]] — following a link creates it if it doesn't
   exist yet.
 - Tag anything with #hashtags and search `tag:name` to find it again.

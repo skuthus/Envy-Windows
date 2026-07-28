@@ -117,6 +117,7 @@ const P = {
   bold: /\*\*([^*\n]+)\*\*/g,
   italic: /(?<!\*)\*([^*\n]+)\*(?!\*)/g,
   strikethrough: /~~([^~\n]+)~~/g,
+  highlight: /==([^=\n]+)==/g,
   code: /`([^`\n]+)`/g,
   fencedCodeBlock: /^```[^\n]*\n([\s\S]*?)\n```[ \t]*$/gm,
   header: /^(#{1,6})[ \t]+(.*)$/gm,
@@ -297,6 +298,7 @@ const styles = {
   bold: mark('envy-bold'),
   italic: mark('envy-italic'),
   strikethrough: mark('envy-strike'),
+  highlight: mark('envy-highlight-mark'),
   code: mark('envy-code'),
   codeBlock: mark('envy-code-block'),
   link: mark('envy-link'),
@@ -622,6 +624,35 @@ function buildDecorations(view: EditorView): DecorationSet {
           marks.push({ from: s, to: s + markerLen, deco: styles.marker })
           marks.push({ from: e - (markerLen === 3 && re === P.embed ? 2 : markerLen), to: e, deco: styles.marker })
         }
+      }
+    }
+
+    // `==highlight==` is the last inline pass, as on the Mac: everything else
+    // has claimed its ranges by now, and the search pass still paints after.
+    // The two share a colour, so a marked word that is also a search match
+    // simply stays marked — the honest outcome of reusing one colour for both.
+    // Inline code and fenced blocks are already claimed, so `a == b` inside
+    // backticks is left alone for free.
+    //
+    // It gets its own pass rather than joining the loop above because the
+    // background belongs to the *content* alone, never the markers — the Mac
+    // applies it to `match.range(at: 1)` for the same reason. Painting the whole
+    // match instead puts the revealed `==` on the highlight, where the dim
+    // marker colour is chosen to be quiet against the page and comes out barely
+    // readable against amber.
+    for (const m of text.matchAll(P.highlight)) {
+      const s = base + m.index!
+      const e = s + m[0].length
+      if (insideCode(s, e)) continue
+      if (claimed.some(([x, y]) => s < y && e > x)) continue
+      claimed.push([s, e])
+      marks.push({ from: s + 2, to: e - 2, deco: styles.highlight })
+      if (!selectionTouches(view, s, e)) {
+        marks.push({ from: s, to: s + 2, deco: hidden })
+        marks.push({ from: e - 2, to: e, deco: hidden })
+      } else {
+        marks.push({ from: s, to: s + 2, deco: styles.marker })
+        marks.push({ from: e - 2, to: e, deco: styles.marker })
       }
     }
 
