@@ -188,6 +188,10 @@ function renderAbout(version: string): HTMLElement {
 /// Windows user would be describing changes they never experienced.
 const WHATS_NEW: Array<{ title: string; body: string }> = [
   {
+    title: 'Updates actually apply now',
+    body: 'An update could report success while leaving the old version in place, so Envy would offer you the same update on every launch. It was installing over its own running copy and quietly skipping the file it could not replace. It now steps out of the way first.',
+  },
+  {
     title: 'Colour your folders',
     body: 'Organise by pile, if you like — a second axis alongside tags. Turn on “Show items in subfolders” in Settings, give a folder a colour, and every note inside it shows a dot in that colour. Right-click a note → Move to → to file it, or make a folder on the spot. It is a real file move, so the title does not change and [[links]] still resolve.',
   },
