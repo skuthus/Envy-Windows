@@ -45,6 +45,13 @@ export const setSearchQuery = StateEffect.define<string>()
 /// whether the styler runs.
 export const setPlainText = StateEffect.define<boolean>()
 
+/// Forces a restyle when something the decorations depend on changed outside
+/// the document — a per-domain emoji, say, which lives in preferences rather
+/// than in the text. Without it nothing in the transaction would tell the
+/// plugin anything had changed, and the pill would keep its old mark until the
+/// next keystroke.
+export const restyle = StateEffect.define<null>()
+
 export const plainTextField = StateField.define<boolean>({
   create: () => false,
   update(value, tr) {
@@ -292,6 +299,103 @@ interface Mark {
 
 const mark = (cls: string) => Decoration.mark({ class: cls })
 const hidden = Decoration.replace({})
+
+// --- Link pills --------------------------------------------------------------
+
+/// The domain a bare URL should show — its host, with any leading `www.`
+/// dropped. `null` for a string with no `://host`, which then falls back to
+/// plain full-URL styling rather than collapsing to nothing.
+///
+/// Parsed by hand rather than with `URL`, which is lenient in ways that hurt
+/// here: it happily accepts a truncated URL mid-typing and invents a host.
+export function urlDomain(urlText: string): string | null {
+  const sep = urlText.indexOf('://')
+  if (sep < 0) return null
+  let start = sep + 3
+  let end = urlText.length
+  for (let i = start; i < urlText.length; i++) {
+    const c = urlText[i]
+    if (c === '/' || c === '?' || c === '#') {
+      end = i
+      break
+    }
+  }
+  if (end - start > 4 && urlText.slice(start, start + 4).toLowerCase() === 'www.') {
+    start += 4
+  }
+  return end > start ? urlText.slice(start, end) : null
+}
+
+/// Per-domain emoji for link pills — a preference, not note content.
+///
+/// The note holds the plain URL; the emoji is presentation keyed by the site,
+/// so every link to one domain carries the same mark and nothing is written
+/// into the file. Read straight from storage rather than passed in, because a
+/// widget is rebuilt on every restyle anyway and threading it through the
+/// facets would buy nothing.
+function domainEmoji(domain: string): string | null {
+  try {
+    const all = JSON.parse(localStorage.getItem('domainEmojis') ?? '{}') as Record<string, string>
+    return all[domain] ?? null
+  } catch {
+    return null
+  }
+}
+
+/// A bare URL collapsed to `emoji domain ↗`.
+class UrlPillWidget extends WidgetType {
+  constructor(
+    readonly url: string,
+    readonly domain: string,
+    /// Captured at build time rather than read in `toDOM`, so that `eq` can see
+    /// it. A widget whose `eq` returns true keeps its existing DOM and is never
+    /// asked to build again — so comparing only the URL and domain meant a
+    /// newly chosen emoji did not appear until something else forced the pill
+    /// to be rebuilt, which is exactly the symptom: it changed after leaving
+    /// the note and coming back.
+    readonly emoji: string | null,
+  ) {
+    super()
+  }
+
+  eq(other: UrlPillWidget) {
+    return (
+      other.url === this.url && other.domain === this.domain && other.emoji === this.emoji
+    )
+  }
+
+  toDOM() {
+    const pill = document.createElement('span')
+    pill.className = 'envy-url-pill'
+    pill.title = this.url
+    const emoji = this.emoji
+    if (emoji) {
+      const e = document.createElement('span')
+      e.className = 'envy-url-emoji'
+      e.textContent = emoji
+      pill.append(e)
+    }
+    const label = document.createElement('span')
+    label.className = 'envy-url-domain'
+    label.textContent = this.domain
+    pill.append(label)
+    const arrow = document.createElement('span')
+    arrow.className = 'envy-url-arrow'
+    arrow.textContent = '↗'
+    pill.append(arrow)
+    // The URL rides along so the click and right-click handlers in the app can
+    // act without re-parsing the document.
+    pill.dataset.url = this.url
+    pill.dataset.domain = this.domain
+    return pill
+  }
+
+  /// The pill handles its own clicks — without this the view treats them as
+  /// clicks on an opaque widget and just moves the caret.
+  ignoreEvent() {
+    return true
+  }
+}
 
 const styles = {
   boldItalic: mark('envy-bold envy-italic'),
@@ -674,6 +778,26 @@ function buildDecorations(view: EditorView): DecorationSet {
         if (insideCode(s, e)) continue
         if (claimed.some(([x, y]) => s < y && e > x)) continue
         marks.push({ from: s, to: e, deco: styles.link })
+
+        // A bare URL collapses to a pill showing just its domain. Bracketed
+        // autolinks keep their full text: someone wrote the brackets to say
+        // "this is a URL", and hiding it would undo that.
+        if (re !== P.bareURL) continue
+        const domain = urlDomain(m[0])
+        // No `://host` to show means nothing to collapse to, so it stays a
+        // plain full-length link rather than becoming an empty pill.
+        if (!domain) continue
+        // Revealed while the cursor is inside it, exactly like every other
+        // marker — a pill you cannot put the caret into is a link you cannot
+        // edit.
+        if (selectionTouches(view, s, e)) continue
+        marks.push({
+          from: s,
+          to: e,
+          deco: Decoration.replace({
+            widget: new UrlPillWidget(m[0], domain, domainEmoji(domain)),
+          }),
+        })
       }
     }
 
@@ -781,7 +905,9 @@ const stylerPlugin = ViewPlugin.fromClass(
       // arrives as a bare effect with no doc or selection change at all, so it
       // has to be checked for explicitly or the highlights never appear.
       const queryChanged = update.transactions.some((tr) =>
-        tr.effects.some((e) => e.is(setSearchQuery) || e.is(setPlainText)),
+        tr.effects.some(
+          (e) => e.is(setSearchQuery) || e.is(setPlainText) || e.is(restyle),
+        ),
       )
       // Focus is an input to the reveal rule now, so gaining or losing it has
       // to redecorate — otherwise markers stay revealed after clicking away.

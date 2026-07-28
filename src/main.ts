@@ -17,6 +17,7 @@ import {
   changedRange,
   flashField,
   setFlash,
+  restyle,
 } from './styler'
 import {
   autoPairing,
@@ -577,6 +578,86 @@ function renderDueBadge(due: string | null) {
 /// Tags of the open note, shown beside its title. Off by default — the tags
 /// are already visible in the text, so this is for people who want them
 /// summarised rather than hunted for.
+// --- Link pills --------------------------------------------------------------
+// A bare URL renders as a pill showing just its domain. The emoji beside it is
+// a preference keyed by the domain — the note holds the plain URL, so every
+// link to one site carries the same mark and nothing is written into the file.
+
+/// The quick picks, matching the Mac's — a spread of source types a commonplace
+/// book tends to collect.
+const DOMAIN_EMOJI_PRESETS = ['📰', '📄', '📚', '📺', '🎥', '🎧', '🐙', '💻', '🛒', '💬', '⭐️', '🌐']
+
+function domainEmojis(): Record<string, string> {
+  try {
+    return JSON.parse(localStorage.getItem('domainEmojis') ?? '{}') as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+function setDomainEmoji(domain: string, emoji: string | null) {
+  const all = domainEmojis()
+  if (emoji) all[domain] = emoji
+  else delete all[domain]
+  localStorage.setItem('domainEmojis', JSON.stringify(all))
+  // The pill is a widget built during styling, so a restyle is what repaints
+  // it — there is no element to poke directly, and nothing in the document
+  // changed for the plugin to notice on its own.
+  view.dispatch({ effects: restyle.of(null) })
+}
+
+// Delegated rather than bound inside the widget: the widget is built by the
+// styler, which has no business knowing about commands or context menus, and
+// is rebuilt on every restyle anyway.
+editorEl.addEventListener('click', (e) => {
+  const pill = (e.target as HTMLElement).closest('.envy-url-pill') as HTMLElement | null
+  if (!pill?.dataset.url) return
+  e.preventDefault()
+  void invoke('open_external_url', { url: pill.dataset.url }).catch((err) =>
+    console.error('could not open the link', err),
+  )
+})
+
+editorEl.addEventListener('contextmenu', (e) => {
+  const pill = (e.target as HTMLElement).closest('.envy-url-pill') as HTMLElement | null
+  const domain = pill?.dataset.domain
+  if (!domain) return
+  e.preventDefault()
+  e.stopPropagation()
+  const current = domainEmojis()[domain]
+  // Bare emoji, as the Mac's menu items are — the domain is already named by
+  // the pill that was right-clicked, so repeating it on all twelve rows is
+  // noise.
+  const items: MenuItemSpec[] = DOMAIN_EMOJI_PRESETS.map((emoji) => ({
+    label: emoji,
+    run: () => setDomainEmoji(domain, emoji),
+  }))
+  items.push({ label: '', separator: true })
+  items.push({
+    label: 'Other…',
+    run: () => {
+      // macOS can open the Character Viewer and read the choice back. Windows
+      // has no equivalent an app can invoke, so this asks for the character
+      // instead — Win+. opens the system emoji panel inside the field, which
+      // is the same gesture, just started by the person rather than the app.
+      const picked = window.prompt(`Emoji for ${domain} — press Win+. to pick one`, current ?? '')
+      if (picked === null) return
+      // One character. The picker can leave a variation selector behind, and
+      // an emoji is one glyph however many code units it takes.
+      const first = [...picked.trim()][0] ?? null
+      setDomainEmoji(domain, first)
+    },
+  })
+  if (current) {
+    items.push({
+      label: 'Remove Emoji',
+      destructive: true,
+      run: () => setDomainEmoji(domain, null),
+    })
+  }
+  openContextMenu(e.clientX, e.clientY, items)
+})
+
 // --- Tag colours -------------------------------------------------------------
 // Like a folder's colour, this is a *preference*, not note content. The `#tag`
 // in the file is the truth and stays exactly as portable as before; the tint is
@@ -3234,6 +3315,10 @@ async function boot() {
   // "not registered" and prove nothing.
   setSearchQuery,
   searchQueryField,
+  // Exposed so a preference-driven repaint can be exercised the same way the
+  // query one is — the pill's emoji lives outside the document, so nothing in
+  // a transaction would otherwise show it changing.
+  restyle,
   pairingEdit,
   dueTokenAt,
   toggleDueToken,

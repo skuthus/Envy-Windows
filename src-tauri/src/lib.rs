@@ -252,6 +252,25 @@ fn extract_to_note(
     Ok(NoteDto::from_note(&note, true, &root))
 }
 
+/// Opens a link from a note in the default browser.
+///
+/// The scheme is checked rather than trusted. This opens whatever a note's text
+/// says, and a note can be written by anything — synced in, pasted, or edited
+/// outside Envy — so restricting it to http and https keeps a file:// or a
+/// shell-adjacent scheme in someone's notes from becoming a way to launch
+/// things by clicking a link that looked ordinary.
+#[tauri::command]
+fn open_external_url(url: String, app: tauri::AppHandle) -> Result<(), String> {
+    let lowered = url.to_lowercase();
+    if !lowered.starts_with("http://") && !lowered.starts_with("https://") {
+        return Err(format!("refusing to open a non-web link: {url}"));
+    }
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// Every folder under the Index a note could be filed into, for the "Move to"
 /// menu. Walked fresh each time the menu opens rather than cached — folders
 /// change from outside Envy as easily as from within it.
@@ -1415,6 +1434,7 @@ pub fn run() {
             extract_to_note,
             list_subfolders,
             move_note_to_subfolder,
+            open_external_url,
             open_link,
             rename_note,
             delete_note,

@@ -1329,6 +1329,25 @@ body.popover {
 /* Italic belongs to the quoted text, not to the ">" that introduces it. */
 .envy-blockquote-text { font-style: italic; }
 
+/* --- Link pills -------------------------------------------------------------
+   A bare URL collapsed to its domain. A translucent capsule in the link colour
+   so it reads as a link without needing a theme entry of its own, with the
+   arrow solid — the one part that says "this leaves Envy". */
+.envy-url-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--envy-link) 15%, transparent);
+  color: var(--envy-link);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.envy-url-pill:hover { background: color-mix(in srgb, var(--envy-link) 28%, transparent); }
+.envy-url-emoji { font-size: 0.9em; }
+.envy-url-arrow { font-size: 0.85em; opacity: 0.75; }
+
 /* --- Tasks --------------------------------------------------------------- */
 .envy-checkbox {
   display: inline-flex;
