@@ -24,9 +24,17 @@ for the same reason.
 
 ## Status
 
-Beta. Everything below is built and in use except themes — the colour settings
-and theme gallery are not written yet, so Envy follows the system light/dark
-setting only.
+Beta, and feature-matched to the macOS app as of its **1.7.0** — colour-coded
+folders, tag colours, `==highlight==`, the `stale:` search, extract-selection-
+to-a-note, and domain pills for bare links all came across.
+
+Two things are deliberately absent. **Themes** — the colour settings and theme
+gallery are not written yet, so Envy follows the system light/dark setting
+only. And **Apple Notes import**, which has no meaning here.
+
+Where the Mac deliberately hides something, so does this: the `⎈` AI-provenance
+badge and its signature protection are switched off there pending a design, and
+they stay off here.
 
 ## Why this is a port and not a build target
 

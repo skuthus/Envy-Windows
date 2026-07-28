@@ -188,24 +188,24 @@ function renderAbout(version: string): HTMLElement {
 /// Windows user would be describing changes they never experienced.
 const WHATS_NEW: Array<{ title: string; body: string }> = [
   {
-    title: 'Everything is remappable',
-    body: 'Twenty-one keyboard shortcuts, all changeable in Settings → Shortcuts, including the three that work from any app. Conflicts are flagged rather than left to be discovered.',
+    title: 'Colour your folders',
+    body: 'Organise by pile, if you like — a second axis alongside tags. Turn on “Show items in subfolders” in Settings, give a folder a colour, and every note inside it shows a dot in that colour. Right-click a note → Move to → to file it, or make a folder on the spot. It is a real file move, so the title does not change and [[links]] still resolve.',
   },
   {
-    title: 'Multi-select',
-    body: 'Shift-click and Shift-arrow select a range, Ctrl-click toggles individual notes, and a bulk delete restores as one action.',
+    title: 'Tags got colour too',
+    body: 'Right-click a tag chip beside a note’s title to colour that tag, and every note carrying it shows the same colour. Like a folder’s colour it is a preference, never written into a note — your #tag on disk is untouched.',
   },
   {
-    title: 'Note embeds and link previews',
-    body: '![[Note]] shows that note inline, and Alt-clicking a link opens it in a small editable panel without leaving where you are.',
+    title: 'Split a note in two',
+    body: 'When a note has quietly grown to hold two ideas, select the part that wants to stand alone and press Ctrl+Alt+N. It becomes its own note, with a [[link]] left in its place and the title taken from the selection’s first line.',
   },
   {
-    title: 'Typing gets out of the way',
-    body: 'Emoji shortcodes, arrow ligatures, auto-pairing brackets, and relative due dates that freeze to a real date so they stop sliding forward.',
+    title: 'Highlighting, and a stale: search',
+    body: '==highlight== marks text with a background. And stale: is the flip side of date: — notes you have not touched. Bare stale: means the last six months; stale:week, stale:month, stale:year or stale:90 narrow it. Pair it with orphan: to surface notes that are both disconnected and forgotten.',
   },
   {
-    title: 'Reference built in',
-    body: 'Markup commands, every keyboard shortcut, and all 383 emoji shortcodes, all searchable from Settings.',
+    title: 'Cleaner links',
+    body: 'A bare URL collapses to a tidy pill showing just its domain, and right-clicking one lets you give that site an emoji. Click into it and the full address comes back so you can edit it.',
   },
 ]
 
