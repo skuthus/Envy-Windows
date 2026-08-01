@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use fancy_regex::Regex;
 use rayon::prelude::*;
 
 use crate::filename::{available_path, sanitize_title, unique_filename};
@@ -186,6 +187,160 @@ impl NoteStore {
             self.notes[i] = moved.clone();
         }
         Some(moved)
+    }
+
+    /// Every folder, paired with how many notes clicking it would show — the
+    /// rows of the `folder:` browse catalog. Most-populated first, ties
+    /// alphabetical.
+    ///
+    /// The count is exact-or-descendant, not direct membership: clicking a row
+    /// runs `folder:"Name"`, which matches the folder *and everything nested
+    /// inside it*, so `Projects` counts a note in `Projects/Work` too. That is
+    /// the 1.8.8 rule that a row's count equals what clicking it shows — a note
+    /// deliberately counts toward every folder that contains it.
+    pub fn folder_counts(&self) -> Vec<(String, usize)> {
+        let folders = self.subfolders();
+        let paths: Vec<String> = self.notes.iter().filter_map(|n| self.subfolder_path(n)).collect();
+        let mut rows: Vec<(String, usize)> = folders
+            .into_iter()
+            .map(|folder| {
+                let descendant = format!("{folder}/");
+                let count = paths
+                    .iter()
+                    .filter(|p| **p == folder || p.starts_with(&descendant))
+                    .count();
+                (folder, count)
+            })
+            .collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        rows
+    }
+
+    /// Every tag in the vault, paired with how many notes carry it — the rows of
+    /// the `tag:` browse catalog. Most-used first, ties alphabetical.
+    pub fn tag_counts(&self) -> Vec<(String, usize)> {
+        use std::collections::HashMap;
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for note in &self.notes {
+            for tag in note.tags() {
+                *counts.entry(tag.clone()).or_default() += 1;
+            }
+        }
+        let mut rows: Vec<(String, usize)> = counts.into_iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        rows
+    }
+
+    /// Renames a subfolder, carrying every note inside it (and every nested
+    /// folder) along. Returns the folder's new relative path, or `None` if the
+    /// rename was refused.
+    ///
+    /// The title of each note is untouched — only the folder it sits in changes
+    /// — so `[[links]]` pointing at any of them still resolve, which is why this
+    /// needs no link rewriting. Adding a `/` to the new path re-files the folder
+    /// under another (`Work` → `Archive/Work`), since the path *is* the folder's
+    /// place. Renaming onto an existing folder, or to (or from) a reserved name,
+    /// is refused.
+    pub fn rename_folder(&mut self, old_path: &str, new_path_raw: &str) -> Option<String> {
+        // Each `/`-segment is sanitized the way a filename is; `/` itself stays
+        // the separator. Empty segments (a doubled or trailing slash) drop out.
+        let new_path = new_path_raw
+            .split('/')
+            .map(sanitize_folder_segment)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("/");
+        if new_path.is_empty() || new_path == old_path {
+            return None;
+        }
+
+        // Neither end may be a reserved folder — those are Envy's own, not the
+        // user's to rename into or out of. Checked on the first segment, since
+        // that is the one that would collide with a service folder at the root.
+        let reserved = [TEMPLATES_FOLDER_NAME, INBOX_FOLDER_NAME, TRASH_FOLDER_NAME];
+        let first_segment = |p: &str| p.split('/').next().unwrap_or("").to_string();
+        let new_first = first_segment(&new_path);
+        let old_first = first_segment(old_path);
+        if reserved.iter().any(|r| r.eq_ignore_ascii_case(&new_first))
+            || reserved.iter().any(|r| r.eq_ignore_ascii_case(&old_first))
+        {
+            return None;
+        }
+
+        let old_url = self.directory.join(old_path);
+        let new_url = self.directory.join(&new_path);
+        if !old_url.is_dir() {
+            return None;
+        }
+        // A rename that only changes case is the folder onto itself on a
+        // case-insensitive filesystem, so the "already exists" guard must not
+        // fire for it.
+        let case_only = new_path.to_lowercase() == old_path.to_lowercase();
+        if !case_only && new_url.exists() {
+            return None;
+        }
+
+        if let Some(parent) = new_url.parent() {
+            fs::create_dir_all(parent).ok()?;
+        }
+        fs::rename(&old_url, &new_url).ok()?;
+
+        // Re-home every note that lived under the old folder. Index-based so the
+        // note can be read and replaced without overlapping borrows.
+        for i in 0..self.notes.len() {
+            let Ok(rel) = self.notes[i].url().strip_prefix(&old_url) else {
+                continue;
+            };
+            let moved_url = new_url.join(rel);
+            let content = self.notes[i].content().to_string();
+            let modified = self.notes[i].modified;
+            self.notes[i] = Note::new(moved_url, content, modified);
+        }
+        Some(new_path)
+    }
+
+    /// Renames a tag across every note that carries it, rewriting the `#tag`
+    /// text in each file. Merges when the new name already exists — the notes
+    /// simply come to carry the surviving tag, and a note that had both ends up
+    /// with one.
+    ///
+    /// The match is the same word-boundary rule the styler and search use, so
+    /// `#work` is renamed without touching `#workshop` or a `#` mid-word, and
+    /// the file's modified time is preserved so a rename doesn't jump thirty
+    /// notes to the top of a date sort.
+    pub fn rename_tag(&mut self, old_name: &str, new_name: &str) {
+        let old = old_name.to_lowercase();
+        let new = sanitize_tag_name(new_name);
+        if new.is_empty() || new == old {
+            return;
+        }
+        // Tags are `[A-Za-z0-9_-]` only, so `old` carries no regex metacharacters
+        // and needs no escaping. The look-around is the same boundary guard
+        // `Note`'s own tag pattern uses.
+        let pattern = format!(r"(?i)(?<![\w#]){}(?![A-Za-z0-9_-])", format_args!("#{old}"));
+        let Ok(re) = Regex::new(&pattern) else {
+            return;
+        };
+        let replacement = format!("#{new}");
+
+        for i in 0..self.notes.len() {
+            if !self.notes[i].tags().contains(&old) {
+                continue;
+            }
+            let content = self.notes[i].content().to_string();
+            let updated = replace_all(&re, &content, &replacement);
+            if updated == content {
+                continue;
+            }
+            let url = self.notes[i].url().to_path_buf();
+            let modified = self.notes[i].modified;
+            if fs::write(&url, updated.as_bytes()).is_err() {
+                continue;
+            }
+            // Keep the modified time, so a tag rename isn't seen as an edit.
+            let _ = set_modified(&url, modified);
+            self.notes[i] = Note::new(url, updated, modified);
+        }
     }
 
     /// Splits a selection into the title and body of the note it becomes — the
@@ -611,6 +766,40 @@ fn sanitize_extracted_title(s: &str) -> String {
     }
 }
 
+/// One segment of a folder path, cleaned the way a filename is: `:` becomes `-`
+/// (`/` is the separator and handled by the caller), and surrounding whitespace
+/// is dropped. Unlike [`sanitize_extracted_title`] there is no "Untitled"
+/// fallback — an empty segment is filtered out by the caller instead.
+fn sanitize_folder_segment(seg: &str) -> String {
+    seg.replace(':', "-").trim().to_string()
+}
+
+/// Keeps only the characters a tag may contain (`[A-Za-z0-9_-]`), dropping a
+/// leading `#`. Matches the Mac's `sanitizedTagName`, so a rename target is held
+/// to the same shape a typed tag is.
+fn sanitize_tag_name(raw: &str) -> String {
+    let body = raw.trim().strip_prefix('#').unwrap_or(raw.trim());
+    body.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+        .collect()
+}
+
+/// Replaces every match of `re` in `text` with `replacement`, a fixed string
+/// (no capture references). Done by hand because `fancy_regex`'s own
+/// replacement helpers are less certain than iterating the matches, and the
+/// replacement here never refers to a group.
+fn replace_all(re: &Regex, text: &str, replacement: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut last = 0;
+    for m in re.find_iter(text).filter_map(|r| r.ok()) {
+        out.push_str(&text[last..m.start()]);
+        out.push_str(replacement);
+        last = m.end();
+    }
+    out.push_str(&text[last..]);
+    out
+}
+
 fn is_markdown(p: &Path) -> bool {
     p.extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("md"))
@@ -874,6 +1063,139 @@ mod tests {
         let moved = store.move_note(&id, Some("Brand/New")).unwrap();
         assert!(dir.path().join("Brand/New").is_dir());
         assert_eq!(store.subfolder_path(&moved), Some("Brand/New".to_string()));
+    }
+
+    // --- Folder & tag catalogs (1.8.8) --------------------------------------
+
+    #[test]
+    fn folder_counts_are_exact_or_descendant_most_used_first() {
+        let (dir, store) = nested_store_with(&[
+            ("Root.md", "x"),
+            ("Projects/A.md", "x"),
+            ("Projects/B.md", "x"),
+            ("Projects/Work/C.md", "x"),
+            ("Archive/D.md", "x"),
+        ]);
+        let _ = &dir;
+        // A row's count equals what clicking it shows: folder:"Projects" is
+        // exact-or-descendant, so Projects counts A, B *and* the nested Work/C
+        // = 3. Work counts C = 1, Archive counts D = 1. Ordered most-used
+        // first, ties alphabetical.
+        assert_eq!(
+            store.folder_counts(),
+            vec![
+                ("Projects".to_string(), 3),
+                ("Archive".to_string(), 1),
+                ("Projects/Work".to_string(), 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn tag_counts_are_most_used_first() {
+        let (dir, store) = store_with(&[
+            ("A.md", "#rust #tools"),
+            ("B.md", "#rust here"),
+            ("C.md", "#tools and #rust"),
+        ]);
+        let _ = &dir;
+        assert_eq!(
+            store.tag_counts(),
+            vec![("rust".to_string(), 3), ("tools".to_string(), 2)]
+        );
+    }
+
+    #[test]
+    fn rename_folder_carries_nested_notes_and_leaves_titles_alone() {
+        let (dir, mut store) = nested_store_with(&[
+            ("Work/Sprint.md", "body"),
+            ("Work/Deep/Note.md", "x"),
+            ("Hub.md", "see [[Sprint]]"),
+        ]);
+        let out = store.rename_folder("Work", "Active");
+        assert_eq!(out, Some("Active".to_string()));
+        assert!(dir.path().join("Active/Sprint.md").exists());
+        assert!(dir.path().join("Active/Deep/Note.md").exists());
+        assert!(!dir.path().join("Work").exists());
+        // The title never changed, so the link still resolves.
+        let sprint = store.notes().iter().find(|n| n.title() == "Sprint").unwrap();
+        assert_eq!(store.subfolder_path(sprint), Some("Active".to_string()));
+    }
+
+    #[test]
+    fn rename_folder_can_refile_under_another_with_a_slash() {
+        let (dir, mut store) = nested_store_with(&[("Work/A.md", "x")]);
+        let out = store.rename_folder("Work", "Archive/Work");
+        assert_eq!(out, Some("Archive/Work".to_string()));
+        assert!(dir.path().join("Archive/Work/A.md").exists());
+    }
+
+    #[test]
+    fn rename_folder_refuses_reserved_and_duplicate_targets() {
+        let (dir, mut store) = nested_store_with(&[("Work/A.md", "x"), ("Taken/B.md", "x")]);
+        let _ = &dir;
+        // Onto a reserved name.
+        assert_eq!(store.rename_folder("Work", "Templates"), None);
+        assert_eq!(store.rename_folder("Work", "Inbox"), None);
+        // Onto a folder that already exists.
+        assert_eq!(store.rename_folder("Work", "Taken"), None);
+        // No-op / empty targets.
+        assert_eq!(store.rename_folder("Work", "Work"), None);
+        assert_eq!(store.rename_folder("Work", "   "), None);
+        // Work is still where it was.
+        assert!(dir.path().join("Work/A.md").exists());
+    }
+
+    #[test]
+    fn rename_tag_rewrites_on_word_boundaries_only() {
+        let (dir, mut store) = store_with(&[
+            ("A.md", "About #work today"),
+            ("B.md", "A #workshop note, not the same"),
+            ("C.md", "email a#work is not a tag"),
+        ]);
+        let _ = &dir;
+        store.rename_tag("work", "job");
+        let content = |t: &str| {
+            store
+                .notes()
+                .iter()
+                .find(|n| n.title() == t)
+                .unwrap()
+                .content()
+                .to_string()
+        };
+        assert_eq!(content("A"), "About #job today");
+        // #workshop and a#work are untouched.
+        assert_eq!(content("B"), "A #workshop note, not the same");
+        assert_eq!(content("C"), "email a#work is not a tag");
+    }
+
+    #[test]
+    fn rename_tag_merges_into_an_existing_tag() {
+        let (dir, mut store) = store_with(&[
+            ("Both.md", "#old and #new"),
+            ("OnlyOld.md", "just #old"),
+        ]);
+        let _ = &dir;
+        store.rename_tag("old", "new");
+        let tags_of = |t: &str| {
+            let n = store.notes().iter().find(|n| n.title() == t).unwrap();
+            let mut v: Vec<String> = n.tags().iter().cloned().collect();
+            v.sort();
+            v
+        };
+        // The note that had both now carries a single #new (tags dedup).
+        assert_eq!(tags_of("Both"), vec!["new".to_string()]);
+        assert_eq!(tags_of("OnlyOld"), vec!["new".to_string()]);
+    }
+
+    #[test]
+    fn rename_tag_preserves_the_modified_time() {
+        let (dir, mut store) = store_with(&[("A.md", "#old note")]);
+        let before = fs::metadata(dir.path().join("A.md")).unwrap().modified().unwrap();
+        store.rename_tag("old", "new");
+        let after = fs::metadata(dir.path().join("A.md")).unwrap().modified().unwrap();
+        assert_eq!(before, after, "a tag rename must not look like an edit");
     }
 
     fn extracted(s: &str) -> (String, String) {

@@ -641,12 +641,12 @@ editorEl.addEventListener('contextmenu', (e) => {
   items.push({ label: '', separator: true })
   items.push({
     label: 'Other…',
-    run: () => {
+    run: async () => {
       // macOS can open the Character Viewer and read the choice back. Windows
       // has no equivalent an app can invoke, so this asks for the character
       // instead — Win+. opens the system emoji panel inside the field, which
       // is the same gesture, just started by the person rather than the app.
-      const picked = window.prompt(`Emoji for ${domain} — press Win+. to pick one`, current ?? '')
+      const picked = await textPrompt(`Emoji for ${domain} — press Win+. to pick one`, current ?? '')
       if (picked === null) return
       // One character. The picker can leave a variation selector behind, and
       // an emoji is one glyph however many code units it takes.
@@ -1622,6 +1622,18 @@ async function runSearch() {
     return
   }
 
+  const catalog = catalogMode()
+  if (catalog !== null) {
+    catalogRows = await invoke<CatalogRow[]>(catalog === 'tag' ? 'tag_catalog' : 'folder_catalog')
+    results = []
+    trashResults = []
+    templateResults = []
+    highlighted = 0
+    trashPreviewEl.classList.add('hidden')
+    renderCatalog(catalog)
+    return
+  }
+
   trashResults = []
   templateResults = []
   trashPreviewEl.classList.add('hidden')
@@ -1682,6 +1694,42 @@ async function openHighlighted() {
   if (!target) return
   await openNote(target.id)
   renderList()
+}
+
+/// Moves the list selection by one row and shows what it lands on — the way the
+/// Mac's list behaves: the editor follows the highlight (as the trash and
+/// template previews already do here), and keyboard focus stays put so you can
+/// keep arrowing. `extend` grows a Shift-range instead, only in the ordinary
+/// note list. Shared by the search box and the window-level handler, so arrows
+/// navigate whether or not the search field happens to hold focus — otherwise
+/// they fall through to the browser and merely scroll the list.
+function arrowNavigate(delta: number, extend: boolean) {
+  const catalog = catalogMode()
+  const inTemplate = templateFragment() !== null
+  const inTrash = trashFragment() !== null
+  if (extend && !inTemplate && !inTrash && catalog === null) {
+    extendSelection(delta)
+    renderList()
+    void openHighlighted()
+    return
+  }
+  const next = Math.max(0, Math.min(currentListLength() - 1, highlighted + delta))
+  if (next === highlighted && currentListLength() > 0) {
+    // Already at the end being pushed against — nothing moves, and re-opening
+    // the same note would only fight the editor for no reason.
+    return
+  }
+  if (inTemplate || inTrash) {
+    highlighted = next
+    renderCurrentList()
+  } else if (catalog !== null) {
+    highlighted = next
+    renderCatalog(catalog)
+  } else {
+    selectSingle(next)
+    renderList()
+    void openHighlighted()
+  }
 }
 
 // --- Multi-select -----------------------------------------------------------
@@ -1891,6 +1939,101 @@ window.addEventListener('keydown', (e) => {
 // Suppress the webview's own menu everywhere — this is an app, not a page.
 window.addEventListener('contextmenu', (e) => e.preventDefault())
 
+// --- Dialogs -----------------------------------------------------------------
+// Stand-ins for window.prompt / window.confirm / window.alert, none of which
+// work in Tauri's WebView2 — prompt returns null without ever showing, and
+// confirm/alert are suppressed too, so a rename silently did nothing and a
+// merge went through with no warning. These drive an in-app modal instead and
+// read like the browser APIs they replace: `await textPrompt(...)` resolves to
+// the trimmed text or null; `await confirmModal(...)` resolves to a boolean.
+const promptEl = document.getElementById('prompt')!
+const promptMessageEl = document.getElementById('prompt-message')!
+const promptInputEl = document.getElementById('prompt-input') as HTMLInputElement
+const promptFormEl = document.getElementById('prompt-panel') as HTMLFormElement
+const promptOkEl = document.getElementById('prompt-ok') as HTMLButtonElement
+const promptCancelEl = document.getElementById('prompt-cancel') as HTMLButtonElement
+// null means cancelled; a string (possibly empty) means confirmed — so the
+// confirm variant, which has no text field, still distinguishes OK from Cancel.
+let promptResolve: ((value: string | null) => void) | null = null
+
+function closePrompt(value: string | null) {
+  if (!promptResolve) return
+  const resolve = promptResolve
+  promptResolve = null
+  promptEl.classList.add('hidden')
+  // Focus goes back to the search box — the same place every other overlay
+  // hands control back to, so the keyboard never ends up stranded on nothing.
+  searchInput.focus()
+  resolve(value)
+}
+
+/// Opens the modal. `initial === null` is confirm mode: the text field is
+/// hidden and OK resolves to '' (confirmed) while Cancel resolves to null.
+/// Otherwise it's a prompt and OK resolves to the trimmed field value.
+function openDialog(
+  message: string,
+  initial: string | null,
+  okLabel: string,
+  cancelLabel: string | null,
+): Promise<string | null> {
+  // A dialog already open is resolved as cancelled before opening the next, so
+  // a stray double-trigger can never leave two fighting over one input.
+  if (promptResolve) closePrompt(null)
+  const withInput = initial !== null
+  promptMessageEl.textContent = message
+  promptInputEl.value = initial ?? ''
+  promptInputEl.classList.toggle('hidden', !withInput)
+  promptOkEl.textContent = okLabel
+  // A bare alert has no Cancel — one button that just dismisses it.
+  promptCancelEl.classList.toggle('hidden', cancelLabel === null)
+  if (cancelLabel) promptCancelEl.textContent = cancelLabel
+  promptEl.classList.remove('hidden')
+  if (withInput) {
+    promptInputEl.focus()
+    promptInputEl.select()
+  } else {
+    promptOkEl.focus()
+  }
+  return new Promise((resolve) => {
+    promptResolve = resolve
+  })
+}
+
+function textPrompt(message: string, initial = ''): Promise<string | null> {
+  return openDialog(message, initial, 'OK', 'Cancel')
+}
+
+/// A yes/no confirm. Resolves true only when OK is chosen; Cancel, Escape and a
+/// backdrop click all resolve false — the safe default for a destructive step.
+function confirmModal(message: string, okLabel = 'OK'): Promise<boolean> {
+  return openDialog(message, null, okLabel, 'Cancel').then((v) => v !== null)
+}
+
+/// A message with a single dismiss button — the window.alert replacement.
+function alertModal(message: string): Promise<void> {
+  return openDialog(message, null, 'OK', null).then(() => undefined)
+}
+
+promptFormEl.addEventListener('submit', (e) => {
+  e.preventDefault()
+  // Empty string for confirm/alert (no field); trimmed text for a prompt.
+  closePrompt(promptInputEl.classList.contains('hidden') ? '' : promptInputEl.value.trim())
+})
+promptCancelEl.addEventListener('click', () => closePrompt(null))
+// Escape cancels; the capture phase so it beats any list/editor Escape handler
+// while the prompt is the thing on screen.
+promptEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.preventDefault()
+    e.stopPropagation()
+    closePrompt(null)
+  }
+})
+// A click on the backdrop (outside the panel) cancels, like the other overlays.
+promptEl.addEventListener('mousedown', (e) => {
+  if (e.target === promptEl) closePrompt(null)
+})
+
 // --- Folders -----------------------------------------------------------------
 // A second axis alongside tags: a note lives in exactly one folder ("which
 // pile"), but can carry many tags ("what it's about").
@@ -1929,6 +2072,177 @@ function setFolderColor(folder: string, color: string | null) {
   localStorage.setItem('folderColors', JSON.stringify(all))
   renderList()
   renderFolderColorSettings()
+}
+
+/// The colour menu for a folder's dot — the same palette as tags, plus a
+/// clear. Shown by right-clicking a folder dot in the list or a catalog row.
+function folderColorMenu(folder: string): MenuItemSpec[] {
+  const current = folderColors()[folder]
+  const items: MenuItemSpec[] = FOLDER_PRESETS.map(([label, hex]) => ({
+    label,
+    swatch: hex,
+    run: () => setFolderColor(folder, hex),
+  }))
+  if (current) {
+    items.push({ label: '', separator: true })
+    items.push({
+      label: 'Remove Color',
+      destructive: true,
+      run: () => setFolderColor(folder, null),
+    })
+  }
+  return items
+}
+
+// --- Browse catalogs ---------------------------------------------------------
+// A bare `tag:` or `folder:` in the search box turns the list into a catalog:
+// every tag / folder as a coloured pill or dot with its note count, most-used
+// first. Click a row to see its notes (the search pivots to the quoted, exact
+// form); right-click to recolour or rename. The operators still filter when
+// combined with anything else — the catalog is only the *bare* form.
+
+interface CatalogRow {
+  name: string
+  count: number
+}
+type CatalogKind = 'tag' | 'folder'
+let catalogRows: CatalogRow[] = []
+
+/// Which catalog the current query asks for, or null. The folder catalog needs
+/// subfolders shown — clicking a folder there filters to notes that would
+/// otherwise be hidden — so it only offers when they are.
+function catalogMode(): CatalogKind | null {
+  const q = searchInput.value.trim().toLowerCase()
+  if (q === 'tag:') return 'tag'
+  if (q === 'folder:' && settings.includeSubfolders) return 'folder'
+  return null
+}
+
+/// Re-keys the stored colours after a folder rename, so a coloured folder — and
+/// everything nested inside it — keeps its colour under the new path rather than
+/// silently losing it (the thing a plain Explorer rename does).
+function migrateFolderColors(oldPath: string, newPath: string) {
+  const all = folderColors()
+  let changed = false
+  for (const key of Object.keys(all)) {
+    if (key === oldPath || key.startsWith(`${oldPath}/`)) {
+      const moved = newPath + key.slice(oldPath.length)
+      all[moved] = all[key]
+      delete all[key]
+      changed = true
+    }
+  }
+  if (changed) localStorage.setItem('folderColors', JSON.stringify(all))
+}
+
+async function renameTagFlow(oldName: string) {
+  const next = (await textPrompt(`Rename #${oldName} to`, oldName))?.trim()
+  if (!next || next === oldName) return
+  const clean = next.replace(/^#/, '').toLowerCase()
+  if (!clean || clean === oldName) return
+  // Renaming onto a tag that already exists is a merge — every note carrying
+  // the old one comes to carry the survivor. Worth a word first, since it can't
+  // be undone in one step.
+  const exists = catalogRows.some((r) => r.name === clean)
+  if (exists && !(await confirmModal(`#${clean} already exists. Merge #${oldName} into it?`, 'Merge'))) {
+    return
+  }
+  // The colour belongs to the surviving name: keep the target's if it has one,
+  // otherwise carry the old tag's colour across.
+  const colors = tagColors()
+  if (!colors[clean] && colors[oldName]) setTagColor(clean, colors[oldName])
+  if (colors[oldName]) setTagColor(oldName, null)
+  void invoke('rename_tag', { oldName, newName: clean })
+    .then(() => runSearch())
+    .catch((err) => console.error('rename tag failed', err))
+}
+
+async function renameFolderFlow(oldPath: string) {
+  const next = (
+    await textPrompt(
+      `Rename "${oldPath}" to (add a "/" to file it under another folder)`,
+      oldPath,
+    )
+  )?.trim()
+  if (!next || next === oldPath) return
+  void invoke<string>('rename_folder', { oldPath, newPath: next })
+    .then((newPath) => {
+      migrateFolderColors(oldPath, newPath)
+      return runSearch()
+    })
+    .catch((err) => {
+      // The command rejects with a human message (reserved / taken / empty).
+      void alertModal(typeof err === 'string' ? err : 'Could not rename that folder.')
+    })
+}
+
+/// Renders the catalog into the list. Rows are keyboard-navigable like the note
+/// list; the primary row is highlighted, click pivots, right-click acts.
+function renderCatalog(kind: CatalogKind) {
+  listPaneEl.classList.remove('has-date')
+  const colors = kind === 'tag' ? tagColors() : folderColors()
+  listEl.replaceChildren(
+    ...catalogRows.map((entry, i) => {
+      const row = document.createElement('div')
+      row.className = 'row catalog-row' + (i === highlighted ? ' highlighted' : '')
+      row.setAttribute('role', 'option')
+
+      const label = document.createElement('span')
+      const tint = colors[entry.name]
+      if (kind === 'tag') {
+        label.className = 'envy-tag catalog-tag'
+        label.textContent = `#${entry.name}`
+        if (tint) {
+          label.style.color = tint
+          label.style.background = `color-mix(in srgb, ${tint} 18%, transparent)`
+        }
+      } else {
+        label.className = 'catalog-folder'
+        const dot = document.createElement('span')
+        dot.className = 'folder-dot'
+        // A folder with no colour still gets a hollow marker, so names line up.
+        if (tint) dot.style.background = tint
+        else dot.classList.add('empty')
+        label.append(dot, document.createTextNode(entry.name))
+      }
+
+      const count = document.createElement('span')
+      count.className = 'catalog-count'
+      count.textContent = String(entry.count)
+      row.append(label, count)
+
+      const pivot = () => {
+        // The quoted form, so clicking a row shows exactly its count — an exact
+        // match, never a lookalike.
+        searchInput.value = `${kind}:"${entry.name}"`
+        void runSearch()
+      }
+      const menu = () =>
+        kind === 'tag'
+          ? [
+              ...tagColorMenu(entry.name),
+              { label: '', separator: true } as MenuItemSpec,
+              { label: 'Rename Tag…', run: () => renameTagFlow(entry.name) } as MenuItemSpec,
+            ]
+          : [
+              ...folderColorMenu(entry.name),
+              { label: '', separator: true } as MenuItemSpec,
+              { label: 'Rename Folder…', run: () => renameFolderFlow(entry.name) } as MenuItemSpec,
+            ]
+
+      row.onclick = () => {
+        highlighted = i
+        pivot()
+      }
+      row.oncontextmenu = (e) => {
+        e.preventDefault()
+        highlighted = i
+        renderCatalog(kind)
+        openContextMenu(e.clientX, e.clientY, menu())
+      }
+      return row
+    }),
+  )
 }
 
 /// Settings → Folder Colors: one row per folder, with the palette and a way to
@@ -2015,7 +2329,7 @@ async function moveToItems(note: NoteDto): Promise<MenuItemSpec[]> {
   items.push({
     label: 'New Folder…',
     run: async () => {
-      const name = window.prompt('New folder name')
+      const name = await textPrompt('New folder name')
       if (!name?.trim()) return
       // The move creates the folder on demand, so there is nothing to make
       // first — this is a move to a name that does not exist yet.
@@ -2225,6 +2539,17 @@ async function openOrCreate() {
   }
   if (trashFragment() !== null) return
 
+  const catalog = catalogMode()
+  if (catalog !== null) {
+    // Enter (or click) on a row pivots the search to that tag/folder, exact.
+    const row = catalogRows[highlighted]
+    if (row) {
+      searchInput.value = `${catalog}:"${row.name}"`
+      await runSearch()
+    }
+    return
+  }
+
   const inbox = inboxFragment()
   if (inbox !== null) {
     const title = inbox.trim()
@@ -2397,27 +2722,21 @@ searchInput.addEventListener('blur', () => searchGhostEl.classList.add('hidden')
 function currentListLength(): number {
   if (templateFragment() !== null) return templateResults.length
   if (trashFragment() !== null) return trashResults.length
+  if (catalogMode() !== null) return catalogRows.length
   return results.length
 }
 function renderCurrentList() {
+  const catalog = catalogMode()
   if (templateFragment() !== null) renderTemplateList()
   else if (trashFragment() !== null) renderTrashList()
+  else if (catalog !== null) renderCatalog(catalog)
   else renderList()
 }
 
 searchInput.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
     e.preventDefault()
-    const delta = e.key === 'ArrowDown' ? 1 : -1
-    // Shift extends the selection; without it, arrowing collapses back to one.
-    if (e.shiftKey && templateFragment() === null && trashFragment() === null) {
-      extendSelection(delta)
-    } else {
-      const next = Math.max(0, Math.min(currentListLength() - 1, highlighted + delta))
-      if (templateFragment() === null && trashFragment() === null) selectSingle(next)
-      else highlighted = next
-    }
-    renderCurrentList()
+    arrowNavigate(e.key === 'ArrowDown' ? 1 : -1, e.shiftKey)
   } else if (e.key === 'Enter') {
     e.preventDefault()
     void openOrCreate()
@@ -2440,6 +2759,34 @@ searchInput.addEventListener('keydown', (e) => {
     searchInput.value = ''
     void runSearch()
   }
+})
+
+// Arrow-key list navigation when the search box does *not* hold focus. After
+// clicking a note or a catalog row, focus sits on the body, and without this
+// the arrows would fall through to the browser and merely scroll the list
+// instead of moving the selection — the thing the Mac's list does with them.
+// The editor keeps its own arrows for the cursor, and so do the search and
+// title fields and any open overlay, so this only steps in when the list is
+// what you're looking at.
+window.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+  if (e.defaultPrevented) return
+  if (view.hasFocus) return
+  const active = document.activeElement as HTMLElement | null
+  if (active) {
+    const tag = active.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || active.isContentEditable) return
+  }
+  // Don't move the list behind a dialog that has taken over the screen.
+  if (
+    !settingsEl.classList.contains('hidden') ||
+    !promptEl.classList.contains('hidden') ||
+    !referenceEl.classList.contains('hidden')
+  ) {
+    return
+  }
+  e.preventDefault()
+  arrowNavigate(e.key === 'ArrowDown' ? 1 : -1, e.shiftKey)
 })
 
 async function restoreDeleted() {
@@ -3263,11 +3610,12 @@ el('settings-open-folder').onclick = () => void invoke('reveal_index')
 el('setting-empty-trash').onclick = async () => {
   const waiting = await invoke<NoteDto[]>('trashed_notes', { fragment: '' })
   if (waiting.length === 0) {
-    window.alert('The trash is already empty.')
+    await alertModal('The trash is already empty.')
     return
   }
-  const ok = window.confirm(
+  const ok = await confirmModal(
     `Permanently delete ${waiting.length} note${waiting.length === 1 ? '' : 's'}? This cannot be undone.`,
+    'Delete',
   )
   if (!ok) return
   await invoke('empty_trash')
@@ -3411,6 +3759,17 @@ async function boot() {
   fullSelection,
   ghostCompletion,
   acceptCompletion,
+  // The WebView2 dialog stand-ins, so their resolve behaviour (OK vs Cancel,
+  // confirm vs prompt) can be exercised without the native dialogs that don't
+  // exist in this webview.
+  textPrompt,
+  confirmModal,
+  alertModal,
+  arrowNavigate,
+  renameTagFlow,
+  setCatalogRowsForTest: (rows: CatalogRow[]) => {
+    catalogRows = rows
+  },
   setTagsForTest: (t: string[]) => {
     knownTags = t
   },

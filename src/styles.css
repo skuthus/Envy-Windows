@@ -437,6 +437,41 @@ body.bold-file-list .row-date { font-weight: 700; }
   border-radius: 50%;
   vertical-align: middle;
 }
+/* A folder with no colour still reserves the dot, so catalog names line up. */
+.folder-dot.empty {
+  background: none;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 60%, transparent);
+}
+
+/* --- Browse catalogs -------------------------------------------------------
+   Rows for the bare tag:/folder: catalogs: a coloured pill or dot on the left,
+   the note count pushed to the right — the same two-column shape a note row
+   has, so the list reads consistently as you pivot between them. */
+.catalog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: default;
+}
+.catalog-tag {
+  font-size: calc(12px * var(--envy-ui-scale));
+  padding: 1px 7px;
+}
+.catalog-folder {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.catalog-count {
+  margin-left: auto;
+  padding-left: 8px;
+  font-size: calc(11px * var(--envy-ui-scale));
+  font-variant-numeric: tabular-nums;
+  color: var(--envy-blockquote);
+}
 .inbox-dot {
   display: inline-block;
   width: 6px;
@@ -1175,6 +1210,72 @@ body.popover {
   border-radius: 3px;
   background: var(--envy-code-background);
 }
+
+/* The text-input prompt (rename, new folder, emoji) — WebView2's stand-in for
+   window.prompt. A centred card over a dimming backdrop, like Settings. */
+#prompt {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 30;
+}
+#prompt.hidden { display: none; }
+#prompt-panel {
+  width: min(360px, 88vw);
+  padding: 18px 20px 16px;
+  border-radius: 12px;
+  background: var(--envy-title-bar-background);
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 45%, transparent);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#prompt-message {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--envy-text);
+}
+#prompt-input {
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: var(--envy-background);
+  color: var(--envy-text);
+}
+#prompt-input:focus {
+  outline: none;
+  border-color: var(--envy-link);
+}
+/* Confirm and alert reuse the panel without the text field / without Cancel. */
+#prompt-input.hidden { display: none; }
+#prompt-cancel.hidden { display: none; }
+#prompt-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+#prompt-buttons button {
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 14px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: transparent;
+  color: var(--envy-text);
+  cursor: default;
+}
+#prompt-buttons button:hover { background: color-mix(in srgb, var(--envy-marker) 20%, transparent); }
+#prompt-ok {
+  border-color: color-mix(in srgb, var(--envy-link) 70%, transparent);
+  background: color-mix(in srgb, var(--envy-link) 16%, transparent);
+}
+#prompt-ok:hover { background: color-mix(in srgb, var(--envy-link) 28%, transparent); }
 
 /* Tags beside the note title. Clickable, because a tag you can see and can't
    search on is a dead end. */

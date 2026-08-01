@@ -95,6 +95,21 @@
 
       <div id="context-menu" class="hidden" role="menu"></div>
 
+      <!-- A text-input prompt. WebView2 does not implement window.prompt() (it
+           returns null without ever showing a dialog), so anything that needs a
+           typed answer — renaming a tag or folder, a domain's emoji, a new
+           folder's name — goes through this instead. -->
+      <div id="prompt" class="hidden" role="dialog" aria-modal="true" aria-labelledby="prompt-message">
+        <form id="prompt-panel" method="dialog">
+          <label id="prompt-message" for="prompt-input"></label>
+          <input id="prompt-input" type="text" autocomplete="off" spellcheck="false" />
+          <div id="prompt-buttons">
+            <button id="prompt-cancel" type="button">Cancel</button>
+            <button id="prompt-ok" type="submit">OK</button>
+          </div>
+        </form>
+      </div>
+
       <!-- Alt-click a [[link]] to read the note without leaving where you are.
            Deliberately a modifier-click rather than hover: a popover appearing
            from a passing hover can sit exactly where a Ctrl-click was aimed. -->

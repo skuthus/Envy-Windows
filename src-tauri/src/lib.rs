@@ -340,6 +340,68 @@ fn move_note_to_subfolder(
         .ok_or_else(|| "could not move that note".to_string())
 }
 
+/// One row of a browse catalog: a folder or tag name, and how many notes it
+/// holds.
+#[derive(Serialize)]
+struct CatalogRow {
+    name: String,
+    count: usize,
+}
+
+/// The `folder:` catalog — every folder with its note count, most-used first.
+#[tauri::command]
+fn folder_catalog(state: State<AppState>) -> Vec<CatalogRow> {
+    state
+        .store
+        .lock()
+        .unwrap()
+        .folder_counts()
+        .into_iter()
+        .map(|(name, count)| CatalogRow { name, count })
+        .collect()
+}
+
+/// The `tag:` catalog — every tag with its note count, most-used first.
+#[tauri::command]
+fn tag_catalog(state: State<AppState>) -> Vec<CatalogRow> {
+    state
+        .store
+        .lock()
+        .unwrap()
+        .tag_counts()
+        .into_iter()
+        .map(|(name, count)| CatalogRow { name, count })
+        .collect()
+}
+
+/// Renames a folder across the vault, carrying every note inside it. Returns the
+/// folder's new relative path, or an error if the rename was refused (a reserved
+/// or already-taken name, or an empty target).
+#[tauri::command]
+fn rename_folder(
+    old_path: String,
+    new_path: String,
+    state: State<AppState>,
+) -> Result<String, String> {
+    state.mark_internal_write();
+    state
+        .store
+        .lock()
+        .unwrap()
+        .rename_folder(&old_path, &new_path)
+        .ok_or_else(|| {
+            "That name is already taken, reserved, or empty.".to_string()
+        })
+}
+
+/// Renames a tag across every note that carries it, merging when the new name
+/// already exists.
+#[tauri::command]
+fn rename_tag(old_name: String, new_name: String, state: State<AppState>) {
+    state.mark_internal_write();
+    state.store.lock().unwrap().rename_tag(&old_name, &new_name);
+}
+
 /// Follows a `[[wiki-link]]`, creating the target note if it doesn't exist —
 /// which is most of what makes linking feel immediate rather than clerical.
 #[tauri::command]
@@ -1565,6 +1627,10 @@ pub fn run() {
             extract_to_note,
             list_subfolders,
             move_note_to_subfolder,
+            folder_catalog,
+            tag_catalog,
+            rename_folder,
+            rename_tag,
             open_external_url,
             open_link,
             rename_note,
