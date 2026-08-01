@@ -403,6 +403,22 @@ impl NoteStore {
         self.create_in(title, dir)
     }
 
+    /// Creates a note directly inside `subfolder` (a path relative to the Index
+    /// root), making the folder if it doesn't exist. Backs the `Folder/Title`
+    /// quick-create — the Mac's `store.create(title:inSubfolder:)`. An empty or
+    /// slash-only subfolder lands the note at the root, the same normalisation
+    /// `move_note` applies.
+    pub fn create_in_subfolder(&mut self, title: &str, subfolder: &str) -> std::io::Result<Note> {
+        let trimmed = subfolder.trim_matches(['/', ' ']);
+        let dir = if trimmed.is_empty() {
+            self.directory.clone()
+        } else {
+            self.directory.join(trimmed)
+        };
+        fs::create_dir_all(&dir)?;
+        self.create_in(title, dir)
+    }
+
     fn create_in(&mut self, title: &str, dir: PathBuf) -> std::io::Result<Note> {
         let path = dir.join(unique_filename(title, &dir));
         fs::write(&path, "")?;
@@ -1694,5 +1710,24 @@ mod tests {
         let note = store.create_inbox_note("Thought").unwrap();
         assert!(crate::search::is_inbox_note(&note));
         assert!(dir.path().join("Inbox/Thought.md").exists());
+    }
+
+    #[test]
+    fn create_in_subfolder_files_the_note_and_makes_the_folder() {
+        let (dir, mut store) = nested_store_with(&[]);
+        let note = store.create_in_subfolder("Retro", "Projects/Work").unwrap();
+        assert!(dir.path().join("Projects/Work/Retro.md").exists());
+        // And it comes back scoped to that folder, so a caller can colour it.
+        assert_eq!(
+            subfolder_path(&note, dir.path()),
+            Some("Projects/Work".to_string())
+        );
+    }
+
+    #[test]
+    fn create_in_subfolder_with_no_folder_lands_at_the_root() {
+        let (dir, mut store) = nested_store_with(&[]);
+        store.create_in_subfolder("Loose", "  ").unwrap();
+        assert!(dir.path().join("Loose.md").exists());
     }
 }

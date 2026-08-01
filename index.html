@@ -48,6 +48,9 @@
               aria-label="Note title"
               title="Click to rename. Links to this note are updated."
             />
+            <!-- The open note's folder, when it sits in one. Click pivots to
+                 that folder's notes; right-click recolours it. -->
+            <span id="note-folder" class="hidden"></span>
             <span id="note-tags"></span>
             <span id="note-due"></span>
             <!-- Only for a note still waiting in Inbox/. Reviewing one is a
@@ -223,6 +226,28 @@
               </select>
             </label>
             <label>
+              Show a note's folder as
+              <select id="setting-folder-display">
+                <option value="dot">Colored dot</option>
+                <option value="name">Folder name</option>
+                <option value="off">Nothing</option>
+              </select>
+            </label>
+            <p class="setting-note">
+              For a note in a subfolder: a dot in the folder's colour, the
+              folder's name as a chip, or nothing. Needs “Show items in
+              subfolders”.
+            </p>
+            <label>
+              <input type="checkbox" id="setting-folder-trailing" />
+              Show the folder marker after the title
+            </label>
+            <p class="setting-note">
+              A note's folder dot or name chip sits just after the title by
+              default. Turn this off to move it before the title. The Inbox
+              mark always stays on the left.
+            </p>
+            <label>
               <input type="checkbox" id="setting-due" />
               Allow sorting by due date
             </label>
@@ -248,6 +273,10 @@
             <label>
               <input type="checkbox" id="setting-show-tags" />
               Show tags in title bar
+            </label>
+            <label>
+              <input type="checkbox" id="setting-show-folder-titlebar" />
+              Show folder in title bar
             </label>
             <label>
               <input type="checkbox" id="setting-show-due-pill" />

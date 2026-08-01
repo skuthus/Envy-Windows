@@ -263,6 +263,24 @@ fn create_note(title: String, state: State<AppState>) -> Result<NoteDto, String>
         .map_err(|e| e.to_string())
 }
 
+/// Creates a note inside an existing subfolder — the `Folder/Title` quick-create
+/// from the search box. The frontend only calls this once it has matched the
+/// folder against a real subfolder, so an unknown folder never reaches here.
+#[tauri::command]
+fn create_note_in_subfolder(
+    title: String,
+    subfolder: String,
+    state: State<AppState>,
+) -> Result<NoteDto, String> {
+    state.mark_internal_write();
+    let mut store = state.store.lock().unwrap();
+    let root = store.directory().to_path_buf();
+    store
+        .create_in_subfolder(&title, &subfolder)
+        .map(|n| NoteDto::from_note(&n, true, &root))
+        .map_err(|e| e.to_string())
+}
+
 /// Splits a selection off into a note of its own, returning it so the caller
 /// can leave a `[[link]]` where the text used to be.
 ///
@@ -1627,6 +1645,7 @@ pub fn run() {
             extract_to_note,
             list_subfolders,
             move_note_to_subfolder,
+            create_note_in_subfolder,
             folder_catalog,
             tag_catalog,
             rename_folder,

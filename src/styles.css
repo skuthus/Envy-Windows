@@ -392,9 +392,20 @@ body.fade-focus #editor-pane:focus-within {
 .row-title {
   flex: 0 1 auto;
   min-width: 0;
+  /* A flex row so the folder dot / inbox mark / pins sit vertically centred on
+     the title rather than riding low the way inline `vertical-align: middle`
+     leaves them. The text keeps the ellipsis; the markers never shrink. */
+  display: flex;
+  align-items: center;
+}
+.row-title-text {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.row-title > :not(.row-title-text) {
+  flex: none;
 }
 /* Right-aligned within its fixed column, so every row's date ends flush at the
    same edge. This is what the Mac does — its row is an HStack with a Spacer
@@ -442,6 +453,78 @@ body.bold-file-list .row-date { font-weight: 700; }
   background: none;
   border: 1px solid color-mix(in srgb, var(--envy-marker) 60%, transparent);
 }
+
+/* --- Row folder markers ----------------------------------------------------
+   The list row's folder dot or name chip, clickable to pivot to that folder.
+   The margin flips with the marker's side so the gap is always between the
+   marker and the title, never doubled or missing. */
+.row-folder-dot {
+  cursor: pointer;
+}
+/* Flex centring lands a marker on the line-box centre, but a capital-led title
+   reads as centred on its cap height — which sits ~1px lower because this
+   font's ascent (14) far exceeds its descent (3). Nudge the round dots down to
+   that optical centre; in em so it tracks the interface scale. Emoji markers
+   (pins) are left alone — they carry their own baseline. */
+.row-folder-dot,
+.inbox-dot {
+  transform: translateY(0.077em);
+}
+.row-folder-dot.marker-leading { margin-right: 6px; }
+.row-folder-dot.marker-trailing { margin-right: 0; margin-left: 6px; }
+.folder-name-chip {
+  display: inline-block;
+  flex: none;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+  font-size: calc(10px * var(--envy-ui-scale));
+  line-height: 1.5;
+  padding: 0 5px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--envy-blockquote);
+  background: color-mix(in srgb, var(--envy-marker) 14%, transparent);
+}
+.folder-name-chip.marker-leading { margin-right: 6px; }
+.folder-name-chip.marker-trailing { margin-left: 6px; }
+
+/* --- Title-bar folder chip -------------------------------------------------
+   The open note's folder beside its tags. Deliberately an *outlined* capsule,
+   a different species from the filled tag chips, with a small folder glyph. */
+.title-folder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 22ch;
+  overflow: hidden;
+  font-size: calc(11px * var(--envy-ui-scale));
+  font-weight: 600;
+  line-height: 1.4;
+  padding: 1px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  color: var(--envy-blockquote);
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 40%, transparent);
+}
+.title-folder-chip > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* A minimal folder glyph, drawn in the current text colour so it takes the
+   folder's tint along with the label. */
+.title-folder-icon {
+  flex: none;
+  width: 9px;
+  height: 7px;
+  background: currentColor;
+  clip-path: polygon(0 0, 40% 0, 52% 18%, 100% 18%, 100% 100%, 0 100%);
+  border-radius: 1px;
+}
+#note-folder.hidden { display: none; }
 
 /* --- Browse catalogs -------------------------------------------------------
    Rows for the bare tag:/folder: catalogs: a coloured pill or dot on the left,

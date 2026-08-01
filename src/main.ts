@@ -89,6 +89,7 @@ const listHeaderEl = document.getElementById('list-header')!
 const titleEl = document.getElementById('note-title') as HTMLInputElement
 const dueEl = document.getElementById('note-due')!
 const tagsEl = document.getElementById('note-tags')!
+const folderChipEl = document.getElementById('note-folder')!
 const editorEl = document.getElementById('editor')!
 const emptyEl = document.getElementById('empty-state')!
 
@@ -739,6 +740,40 @@ function renderTitleBarTags(tags: string[]) {
   }
 }
 
+/// The open note's folder as a chip beside its tags. Only for a note that sits
+/// in a real subfolder — root and Inbox notes show nothing, so it costs no
+/// space when unused. Tinted to the folder's colour (or a neutral outline when
+/// it has none). Click pivots to the folder; right-click recolours it — but no
+/// Rename here, the same as the Mac's title-bar chip. An outlined capsule, a
+/// deliberately different species from the filled tag chips beside it.
+function renderTitleBarFolder(subfolder: string | null) {
+  folderChipEl.replaceChildren()
+  if (!settings.showFolderInTitleBar || !subfolder) {
+    folderChipEl.classList.add('hidden')
+    return
+  }
+  folderChipEl.classList.remove('hidden')
+  const color = folderColors()[subfolder]
+  const chip = document.createElement('span')
+  chip.className = 'title-folder-chip'
+  chip.title = `In ${subfolder} · click to see this folder's notes`
+  const icon = document.createElement('span')
+  icon.className = 'title-folder-icon'
+  const name = document.createElement('span')
+  name.textContent = subfolder
+  chip.append(icon, name)
+  if (color) {
+    chip.style.color = color
+    chip.style.borderColor = `color-mix(in srgb, ${color} 40%, transparent)`
+  }
+  chip.onclick = () => searchByFolder(subfolder)
+  chip.oncontextmenu = (e) => {
+    e.preventDefault()
+    openContextMenu(e.clientX, e.clientY, folderColorMenu(subfolder))
+  }
+  folderChipEl.append(chip)
+}
+
 function dueUrgencyClass(iso: string): string {
   const due = new Date(iso + 'T00:00:00')
   const now = new Date()
@@ -769,6 +804,15 @@ const settings = {
   newNotesStartInInbox: boolSetting('newNotesStartInInbox', false),
   showInboxInMainList: boolSetting('showInboxInMainList', true),
   showTagsInTitleBar: boolSetting('showTagsInTitleBar', false),
+  // The open note's folder as a chip beside its tags — on by default, like the
+  // Mac. Only ever shows for a note that actually sits in a subfolder.
+  showFolderInTitleBar: boolSetting('showFolderInTitleBar', true),
+  // How a note's subfolder shows in the list row: a coloured dot, the folder
+  // name as a chip, or nothing. Default 'dot', matching FolderListDisplay.
+  folderListDisplay: localStorage.getItem('folderListDisplay') ?? 'dot',
+  // Whether that marker sits after the title (the Mac default) or before it.
+  // The Inbox mark always leads regardless — it's a different kind of signal.
+  folderDotTrailing: boolSetting('folderDotTrailing', true),
   showDuePill: boolSetting('showDuePill', true),
   requireModifierForLinkClick: boolSetting('requireModifierForLinkClick', true),
   showBacklinks: boolSetting('showBacklinks', true),
@@ -1080,6 +1124,46 @@ function renderRowWindow(force = false) {
 
 listEl.addEventListener('scroll', () => renderRowWindow(), { passive: true })
 
+/// A list row's folder marker, per the folderListDisplay setting: a coloured
+/// dot ('dot', only when the folder has a colour), the folder name as a tinted
+/// chip ('name', for any subfolder), or nothing ('off'). Clicking it pivots to
+/// that folder's notes and right-clicking recolours it — the same gestures the
+/// title-bar chip offers. Returns null when there's nothing to draw. The click
+/// stops propagating so it never doubles as opening the row's note.
+function buildFolderIndicator(subfolder: string): HTMLElement | null {
+  const mode = settings.folderListDisplay
+  if (mode === 'off') return null
+  const color = folderColorCache[subfolder]
+  let el: HTMLElement
+  if (mode === 'name') {
+    el = document.createElement('span')
+    el.className = 'folder-name-chip'
+    el.textContent = subfolder
+    if (color) {
+      el.style.color = color
+      el.style.background = `color-mix(in srgb, ${color} 15%, transparent)`
+    }
+  } else {
+    // 'dot': the dot alone means "in a coloured folder", so an uncoloured
+    // folder shows nothing rather than a blank circle.
+    if (!color) return null
+    el = document.createElement('span')
+    el.className = 'folder-dot row-folder-dot'
+    el.style.background = color
+  }
+  el.title = `In ${subfolder} — click to see this folder's notes`
+  el.onclick = (e) => {
+    e.stopPropagation()
+    searchByFolder(subfolder)
+  }
+  el.oncontextmenu = (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    openContextMenu(e.clientX, e.clientY, folderColorMenu(subfolder))
+  }
+  return el
+}
+
 function buildRow(note: NoteDto, i: number): HTMLElement {
       const row = document.createElement('div')
       // The primary selection is marked differently from the rest: it's the
@@ -1093,23 +1177,29 @@ function buildRow(note: NoteDto, i: number): HTMLElement {
 
       const title = document.createElement('div')
       title.className = 'row-title'
-      title.textContent = note.title
+      // The title text lives in its own span so it, and only it, ellipsizes —
+      // the folder/inbox/pin markers around it stay whole and centred.
+      const titleText = document.createElement('span')
+      titleText.className = 'row-title-text'
+      titleText.textContent = note.title
+      title.append(titleText)
 
-      // A fleeting note is marked with an amber dot. The folder it sits in is
-      // the only thing that makes it fleeting, so this is derived, not stored.
+      // A fleeting note is marked with an amber dot, always leading — "unfiled"
+      // outranks a folder category, and the two never stack. A filed note in a
+      // subfolder instead gets its folder marker, on whichever side the setting
+      // chooses (trailing by default; the Inbox mark is unaffected).
       if (note.isInbox) {
         const dot = document.createElement('span')
         dot.className = 'inbox-dot'
         dot.title = 'Fleeting note'
         title.prepend(dot)
-      } else if (note.subfolder && folderColorCache[note.subfolder]) {
-        // Only when its folder has been given a colour, and never alongside the
-        // inbox dot — there is one slot, and "unfiled" outranks a folder.
-        const dot = document.createElement('span')
-        dot.className = 'folder-dot'
-        dot.style.background = folderColorCache[note.subfolder]
-        dot.title = `In ${note.subfolder}`
-        title.prepend(dot)
+      } else if (note.subfolder) {
+        const indicator = buildFolderIndicator(note.subfolder)
+        if (indicator) {
+          indicator.classList.add(settings.folderDotTrailing ? 'marker-trailing' : 'marker-leading')
+          if (settings.folderDotTrailing) title.append(indicator)
+          else title.prepend(indicator)
+        }
       }
       if (note.id === trayPinnedId) {
         const pin = document.createElement('span')
@@ -1447,7 +1537,10 @@ function renderTrashList() {
       const icon = document.createElement('span')
       icon.className = 'trash-mark'
       icon.textContent = '🗑'
-      title.append(icon, document.createTextNode(note.title))
+      const nameText = document.createElement('span')
+      nameText.className = 'row-title-text'
+      nameText.textContent = note.title
+      title.append(icon, nameText)
       const date = document.createElement('span')
       date.className = 'row-date'
       date.textContent = formatModified(note.modifiedMs)
@@ -1527,7 +1620,10 @@ function renderTemplateList() {
       row.className = 'row' + (i === highlighted ? ' highlighted' : '')
       const title = document.createElement('div')
       title.className = 'row-title'
-      title.textContent = t.name
+      const nameText = document.createElement('span')
+      nameText.className = 'row-title-text'
+      nameText.textContent = t.name
+      title.append(nameText)
       const kind = document.createElement('span')
       kind.className = 'row-date'
       kind.textContent = 'Template'
@@ -1671,6 +1767,7 @@ async function openNote(id: string) {
   titleEl.disabled = false
   renderDueBadge(note.due)
   renderTitleBarTags(note.tags)
+  renderTitleBarFolder(note.subfolder ?? null)
   // Reviewing a fleeting note is a decision — file it or bin it — so the two
   // actions appear only while looking at one.
   fleetingActionsEl.classList.toggle('hidden', !note.isInbox)
@@ -2072,10 +2169,26 @@ function setFolderColor(folder: string, color: string | null) {
   localStorage.setItem('folderColors', JSON.stringify(all))
   renderList()
   renderFolderColorSettings()
+  // The open note's title-bar chip is keyed on the same colour, so recolour it
+  // in step rather than waiting for the note to be reopened.
+  const open = results.find((n) => n.id === openNoteId)
+  renderTitleBarFolder(open?.subfolder ?? null)
 }
 
 /// The colour menu for a folder's dot — the same palette as tags, plus a
 /// clear. Shown by right-clicking a folder dot in the list or a catalog row.
+/// Pivots the search to one folder's notes — the click every folder marker
+/// shares (list dot/chip, title-bar chip). The quoted-exact form, since folder
+/// names carry spaces far more often than tags; a name containing a quote can't
+/// be quoted, so it falls back to the unquoted partial rather than a malformed
+/// query. Mirrors the Mac's searchByFolder.
+function searchByFolder(folder: string) {
+  searchInput.value = folder.includes('"')
+    ? `folder:${folder.replace(/"/g, '')}`
+    : `folder:"${folder}"`
+  void runSearch()
+}
+
 function folderColorMenu(folder: string): MenuItemSpec[] {
   const current = folderColors()[folder]
   const items: MenuItemSpec[] = FOLDER_PRESETS.map(([label, hex]) => ({
@@ -2529,6 +2642,23 @@ function containsSearchOperator(query: string): boolean {
 ///   `inbox:`, or an exact match on something already waiting, just opens it.
 /// - Any other operator query opens the highlighted note and never creates,
 ///   since the query is a filter rather than a title.
+/// Parses the `Folder/Title` quick-create form. Splits on the *last* slash; the
+/// part before must case-insensitively match an existing subfolder (nested
+/// ones included), the part after is the title. Returns null — falling through
+/// to an ordinary search/create — when subfolders are off, there's no slash, or
+/// the folder isn't one that exists. It never invents a folder. Mirrors the
+/// Mac's folderTargetedCreation.
+function folderTargetedCreation(raw: string): { folder: string; title: string } | null {
+  if (!settings.includeSubfolders) return null
+  const slash = raw.lastIndexOf('/')
+  if (slash === -1) return null
+  const folderPart = raw.slice(0, slash).trim()
+  const titlePart = raw.slice(slash + 1).trim()
+  if (!folderPart || !titlePart) return null
+  const match = knownFolders.find((f) => f.toLowerCase() === folderPart.toLowerCase())
+  return match ? { folder: match, title: titlePart } : null
+}
+
 async function openOrCreate() {
   const raw = searchInput.value
   const query = raw.trim()
@@ -2578,6 +2708,26 @@ async function openOrCreate() {
     focusEditorIfWanted()
     return
   }
+
+  // "Work/Retro notes" files a new "Retro notes" inside the Work folder — the
+  // slash is a folder picker, and it takes priority over opening a partial
+  // match, since typing it is a deliberate "make this here". Only fires when
+  // the part before the last slash names a real subfolder, so an ordinary
+  // search that happens to contain a slash falls straight through.
+  const targeted = folderTargetedCreation(query)
+  if (targeted) {
+    const created = await invoke<NoteDto>('create_note_in_subfolder', {
+      title: targeted.title,
+      subfolder: targeted.folder,
+    })
+    searchInput.value = ''
+    await runSearch()
+    await openNote(created.id)
+    renderList()
+    focusEditorIfWanted()
+    return
+  }
+
   if (results.length > 0) {
     await openHighlighted()
     focusEditorIfWanted()
@@ -2881,6 +3031,7 @@ function closeEditor() {
   titleEl.disabled = false
   dueEl.textContent = ''
   tagsEl.replaceChildren()
+  renderTitleBarFolder(null)
   fleetingActionsEl.classList.add('hidden')
   templateActionsEl.classList.add('hidden')
   emptyEl.classList.remove('hidden')
@@ -3284,6 +3435,13 @@ function openSettings() {
   checkbox('setting-inbox-new').checked = settings.newNotesStartInInbox
   checkbox('setting-inbox-in-list').checked = settings.showInboxInMainList
   checkbox('setting-show-tags').checked = settings.showTagsInTitleBar
+  checkbox('setting-show-folder-titlebar').checked = settings.showFolderInTitleBar
+  checkbox('setting-folder-trailing').checked = settings.folderDotTrailing
+  dropdown('setting-folder-display').value = settings.folderListDisplay
+  // The folder-display choices only bite when subfolders are shown, so the
+  // control is disabled otherwise — the same gating the Mac's picker uses.
+  dropdown('setting-folder-display').disabled = !settings.includeSubfolders
+  checkbox('setting-folder-trailing').disabled = !settings.includeSubfolders
   checkbox('setting-show-due-pill').checked = settings.showDuePill
   checkbox('setting-require-modifier').checked = settings.requireModifierForLinkClick
   checkbox('setting-show-interlinks').checked = settings.showBacklinks
@@ -3384,6 +3542,11 @@ bindToggle('setting-show-tags', 'showTagsInTitleBar', () => {
   const open = results.find((n) => n.id === openNoteId)
   renderTitleBarTags(open?.tags ?? [])
 })
+bindToggle('setting-show-folder-titlebar', 'showFolderInTitleBar', () => {
+  const open = results.find((n) => n.id === openNoteId)
+  renderTitleBarFolder(open?.subfolder ?? null)
+})
+bindToggle('setting-folder-trailing', 'folderDotTrailing', renderList)
 bindToggle('setting-show-due-pill', 'showDuePill', () => {
   const open = results.find((n) => n.id === openNoteId)
   renderDueBadge(open?.due ?? null)
@@ -3396,6 +3559,12 @@ bindToggle('setting-restore-focus', 'restoreFocusOnSummon')
 dropdown('setting-date-style').onchange = (e) => {
   settings.dateDisplayStyle = (e.target as HTMLSelectElement).value
   saveSetting('dateDisplayStyle', settings.dateDisplayStyle)
+  renderList()
+}
+
+dropdown('setting-folder-display').onchange = (e) => {
+  settings.folderListDisplay = (e.target as HTMLSelectElement).value
+  saveSetting('folderListDisplay', settings.folderListDisplay)
   renderList()
 }
 
@@ -3767,6 +3936,15 @@ async function boot() {
   alertModal,
   arrowNavigate,
   renameTagFlow,
+  // Folder-finish surfaces, verifiable without a backend: the Folder/Title
+  // parse, the folder pivot, and the two folder markers.
+  folderTargetedCreation,
+  searchByFolder,
+  renderTitleBarFolder,
+  buildFolderIndicator,
+  setKnownFoldersForTest: (f: string[]) => {
+    knownFolders = f
+  },
   setCatalogRowsForTest: (rows: CatalogRow[]) => {
     catalogRows = rows
   },
