@@ -92,6 +92,14 @@ html, body {
 }
 #search-ghost.hidden { display: none; }
 
+/* The editor's inline ghost completion for [[links]] and #tags — the same dim
+   marker colour the search box's ghost uses, and inert so it can't catch a
+   click or a selection. */
+.cm-ghost-completion {
+  color: var(--envy-marker);
+  pointer-events: none;
+}
+
 #search {
   flex: 1;
   font: inherit;

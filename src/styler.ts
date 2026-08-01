@@ -472,9 +472,11 @@ function tokenizeQuery(q: string): string[] {
 /// `todo:` search that matched it for an entirely different reason.
 ///
 /// `tag:` is deliberately absent. A tag *is* in the text, so it is handled
-/// below by highlighting the matched part of each qualifying `#tag`.
+/// below by highlighting the matched part of each qualifying `#tag`. `title:`
+/// is absent for the same reason — its argument is real title text, so it falls
+/// through to the ordinary highlighter.
 const NON_LITERAL_OPERATORS =
-  /^(date|stale|due|link|todo|ai|inbox|template|trash|orphan|linked):/
+  /^(date|stale|due|link|interlink|folder|img|embed|ghost|todo|ai|inbox|template|trash|orphan|linked):/
 
 /// Ranges in `text` that the query matches, for highlighting.
 ///

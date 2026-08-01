@@ -16,6 +16,7 @@
 //!   honored, since excluding more than one thing has no such ambiguity.
 
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Weekday};
 
@@ -125,6 +126,111 @@ pub fn unquote(text: &str) -> String {
         s = rest;
     }
     s.to_string()
+}
+
+/// Splits a query into its comma-separated OR groups — but only on commas
+/// *outside* double quotes, the same quote handling `tokenize` uses.
+///
+/// A naive split broke any quoted argument containing a comma:
+/// `interlink:"Debrief (Sep 24, 2025)"` split mid-title into two meaningless
+/// groups, and it had silently broken `link:` and quoted phrases with commas
+/// all along. An unterminated quote swallows every comma after it, matching how
+/// an open quote already behaves for spaces.
+fn split_groups(query: &str) -> Vec<String> {
+    let mut groups = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in query.chars() {
+        if ch == '"' {
+            in_quotes = !in_quotes;
+            current.push(ch);
+        } else if ch == ',' && !in_quotes {
+            let g = current.trim();
+            if !g.is_empty() {
+                groups.push(g.to_string());
+            }
+            current.clear();
+        } else {
+            current.push(ch);
+        }
+    }
+    let g = current.trim();
+    if !g.is_empty() {
+        groups.push(g.to_string());
+    }
+    groups
+}
+
+/// An operator's argument (`tag:x`, `folder:"Work"`), split into its text and
+/// whether it was quoted.
+///
+/// Quoting *demands exactness* — `tag:"work"` matches only `#work`,
+/// `folder:"Work"` only that folder and its descendants — while a bare argument
+/// keeps the friendlier partial match (`tag:techn` finds `#technology`). The
+/// tag and folder browsers generate the quoted form, so the count a row shows is
+/// exactly what clicking it yields. `None` for an empty argument.
+fn operator_argument(raw: &str) -> Option<(String, bool)> {
+    let quoted = raw.starts_with('"');
+    let text = unquote(raw);
+    if text.is_empty() {
+        None
+    } else {
+        Some((text, quoted))
+    }
+}
+
+/// `folder:`'s matching rule. Exact means the folder itself or anything nested
+/// inside it; partial means the path merely contains the text (so `work` also
+/// hits `workshop` — fine while typing, wrong for a click on a specific folder).
+fn folder_matches(path: &str, filter: &(String, bool)) -> bool {
+    let (text, exact) = filter;
+    if *exact {
+        path == text || path.starts_with(&format!("{text}/"))
+    } else {
+        fast_contains(path, text)
+    }
+}
+
+/// `tag:`'s matching rule — the same shape as [`folder_matches`], minus the
+/// descendant case, since tags have no hierarchy.
+fn tag_matches(tag: &str, filter: &(String, bool)) -> bool {
+    let (text, exact) = filter;
+    if *exact {
+        tag == text
+    } else {
+        fast_contains(tag, text)
+    }
+}
+
+/// A note's folder path relative to the Index root, lowercased — `""` at the
+/// root, `projects/work` when nested. What `folder:` matches against.
+///
+/// Without a root there is no way to know where the vault starts, so the
+/// fallback is the immediate parent folder's name alone.
+fn relative_folder_path(note: &Note, root_lower: Option<&str>) -> String {
+    let parent = note.url().parent();
+    let parent_name = || {
+        parent
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    };
+    let Some(root_lower) = root_lower else {
+        return parent_name();
+    };
+    let Some(parent) = parent else {
+        return String::new();
+    };
+    // Separators normalised so the comparison holds whichever way the path was
+    // built — folder: keys are plain relative paths, not platform ones.
+    let parent = parent.to_string_lossy().replace('\\', "/").to_lowercase();
+    if parent == root_lower {
+        String::new()
+    } else if let Some(rest) = parent.strip_prefix(&format!("{root_lower}/")) {
+        rest.to_string()
+    } else {
+        parent_name()
+    }
 }
 
 fn fast_contains(haystack: &str, needle: &str) -> bool {
@@ -320,10 +426,39 @@ fn modified_datetime(note: &Note) -> Option<DateTime<Local>> {
     Some(DateTime::<Local>::from(note.modified))
 }
 
+/// An operator argument and whether it was quoted (and so exact). See
+/// [`operator_argument`].
+type Arg = (String, bool);
+
 #[derive(Default)]
 struct GroupQuery {
-    tag: Option<String>,
-    exclude_tags: Vec<String>,
+    tag: Option<Arg>,
+    exclude_tags: Vec<Arg>,
+    /// Bare `tag:` — carries any tag at all; bare `-tag:` — completely untagged.
+    /// Together `-tag: orphan: stale:` is the full hygiene sweep.
+    tagged_only: bool,
+    untagged_only: bool,
+    /// `folder:name` (partial) or `folder:"name"` (exact-or-descendant).
+    folder: Option<Arg>,
+    exclude_folders: Vec<Arg>,
+    /// Bare `folder:` — any note in a subfolder; bare `-folder:` — the unfiled
+    /// notes at the Index root.
+    foldered_only: bool,
+    root_only: bool,
+    /// `title:word` restricts matching to titles only; several AND together.
+    title_terms: Vec<String>,
+    exclude_titles: Vec<String>,
+    /// `interlink:Target` — connected in either direction. First one wins.
+    interlink: Option<String>,
+    exclude_interlinks: Vec<String>,
+    /// `img:` / `embed:` — holds an image / transcludes another note.
+    image_only: bool,
+    image_excluded: bool,
+    embed_only: bool,
+    embed_excluded: bool,
+    /// `ghost:` — has an unresolved `[[link]]`; `-ghost:` — every link resolves.
+    ghost_only: bool,
+    ghost_excluded: bool,
     date: Option<(DateTime<Local>, DateTime<Local>)>,
     /// Notes untouched since this instant. `date:`'s complement.
     stale: Option<DateTime<Local>>,
@@ -367,6 +502,22 @@ impl GroupQuery {
             || self.todo_excluded
             || self.tag.is_some()
             || !self.exclude_tags.is_empty()
+            || self.tagged_only
+            || self.untagged_only
+            || self.folder.is_some()
+            || !self.exclude_folders.is_empty()
+            || self.foldered_only
+            || self.root_only
+            || !self.title_terms.is_empty()
+            || !self.exclude_titles.is_empty()
+            || self.interlink.is_some()
+            || !self.exclude_interlinks.is_empty()
+            || self.image_only
+            || self.image_excluded
+            || self.embed_only
+            || self.embed_excluded
+            || self.ghost_only
+            || self.ghost_excluded
             || self.date.is_some()
             || self.stale.is_some()
             || self.exclude_stale.is_some()
@@ -400,6 +551,23 @@ impl GroupQuery {
                 q.todo_excluded = true;
             } else if t == "todo:" {
                 q.todo_only = true;
+            } else if t == "-img:" {
+                q.image_excluded = true;
+            } else if let Some(rest) = t.strip_prefix("img:") {
+                // Bare "img:" scopes to notes holding an image; trailing text
+                // searches within them, the same shape as inbox:.
+                q.image_only = true;
+                if !rest.is_empty() {
+                    q.free_terms.push(rest.to_string());
+                }
+            } else if t == "-embed:" {
+                q.embed_excluded = true;
+            } else if let Some(rest) = t.strip_prefix("embed:") {
+                // Bare "embed:" scopes to notes that transclude another note.
+                q.embed_only = true;
+                if !rest.is_empty() {
+                    q.free_terms.push(rest.to_string());
+                }
             } else if let Some(rest) = t.strip_prefix("-ai:") {
                 if q.exclude_ai.is_none() {
                     q.exclude_ai = AiFilter::parse(rest);
@@ -408,13 +576,31 @@ impl GroupQuery {
                 if q.ai.is_none() {
                     q.ai = AiFilter::parse(rest);
                 }
+            } else if t == "tag:" {
+                q.tagged_only = true;
+            } else if t == "-tag:" {
+                q.untagged_only = true;
             } else if let Some(rest) = t.strip_prefix("-tag:") {
-                if !rest.is_empty() {
-                    q.exclude_tags.push(rest.to_string());
+                if let Some(arg) = operator_argument(rest) {
+                    q.exclude_tags.push(arg);
                 }
             } else if let Some(rest) = t.strip_prefix("tag:") {
-                if q.tag.is_none() && !rest.is_empty() {
-                    q.tag = Some(rest.to_string());
+                if q.tag.is_none() {
+                    q.tag = operator_argument(rest);
+                }
+            } else if let Some(rest) = t.strip_prefix("-title:") {
+                let term = unquote(rest);
+                if !term.is_empty() {
+                    q.exclude_titles.push(term);
+                }
+            } else if let Some(rest) = t.strip_prefix("title:") {
+                // Restricts matching to titles only — free text also matches
+                // bodies, which at a large vault buries the note *named* for a
+                // thing under every note that merely mentions it. Several
+                // title: terms AND together, like free terms.
+                let term = unquote(rest);
+                if !term.is_empty() {
+                    q.title_terms.push(term);
                 }
             } else if let Some(rest) = t.strip_prefix("date:") {
                 if q.date.is_none() {
@@ -446,10 +632,47 @@ impl GroupQuery {
                         None => q.due_invalid = true,
                     }
                 }
+            } else if t == "ghost:" {
+                // Notes carrying at least one unresolved [[link]] — the
+                // file-list twin of the editor's dimmed ghost links.
+                q.ghost_only = true;
+            } else if t == "-ghost:" {
+                q.ghost_excluded = true;
             } else if t == "linked:" {
                 q.linked_only = true;
             } else if t == "orphan:" {
                 q.orphan_only = true;
+            } else if t == "folder:" {
+                q.foldered_only = true;
+            } else if t == "-folder:" {
+                q.root_only = true;
+            } else if let Some(rest) = t.strip_prefix("-folder:") {
+                if let Some(arg) = operator_argument(rest) {
+                    q.exclude_folders.push(arg);
+                }
+            } else if let Some(rest) = t.strip_prefix("folder:") {
+                // Bare arguments are partial and case-insensitive like tag:,
+                // matched against the whole relative path, so a nested folder is
+                // findable by any of its segments. Quoted arguments are
+                // exact-or-descendant. First one wins.
+                if q.folder.is_none() {
+                    q.folder = operator_argument(rest);
+                }
+            } else if let Some(rest) = t.strip_prefix("-interlink:") {
+                let target = unquote(rest);
+                if !target.is_empty() {
+                    q.exclude_interlinks.push(target);
+                }
+            } else if let Some(rest) = t.strip_prefix("interlink:") {
+                // Everything connected to Target in either direction — notes
+                // containing [[Target]] plus the notes Target links out to. The
+                // Interlinks footer as a searchable list. First one wins.
+                if q.interlink.is_none() {
+                    let target = unquote(rest);
+                    if !target.is_empty() {
+                        q.interlink = Some(target);
+                    }
+                }
             } else if let Some(rest) = t.strip_prefix("-link:") {
                 let target = unquote(rest);
                 if !target.is_empty() {
@@ -514,7 +737,12 @@ fn score_by_term_presence(note: &Note, terms: &[String]) -> Option<i32> {
     Some(title_matches)
 }
 
-fn matched<'a>(notes: &'a [Note], group: &str, ctx: &SearchContext) -> Vec<(&'a Note, i32)> {
+fn matched<'a>(
+    notes: &'a [Note],
+    group: &str,
+    ctx: &SearchContext,
+    root: Option<&Path>,
+) -> Vec<(&'a Note, i32)> {
     let q = GroupQuery::parse(group, ctx);
     let has_operator = q.has_operator();
     let today = ctx.today();
@@ -531,6 +759,43 @@ fn matched<'a>(notes: &'a [Note], group: &str, ctx: &SearchContext) -> Vec<(&'a 
         HashSet::new()
     };
 
+    // ghost:'s reference set — every real note title, built only when the
+    // operator is present (the same guard linked_to_titles uses).
+    let all_note_titles: HashSet<&str> = if q.ghost_only || q.ghost_excluded {
+        notes.iter().map(|n| n.lowercased_title()).collect()
+    } else {
+        HashSet::new()
+    };
+
+    // interlink:'s outbound half — what the target note itself links out to.
+    // One lookup per group (the inbound half is just each candidate's own
+    // wiki_links). A target that doesn't exist leaves this empty, so interlink:
+    // degrades gracefully to link:'s inbound-only meaning.
+    let interlink_outbound: HashSet<&str> = q
+        .interlink
+        .as_deref()
+        .and_then(|target| notes.iter().find(|n| n.lowercased_title() == target))
+        .map(|hub| hub.wiki_links().iter().map(|s| s.as_str()).collect())
+        .unwrap_or_default();
+    let exclude_interlink_outbound: Vec<(&str, HashSet<&str>)> = q
+        .exclude_interlinks
+        .iter()
+        .map(|target| {
+            let outbound = notes
+                .iter()
+                .find(|n| n.lowercased_title() == target.as_str())
+                .map(|hub| hub.wiki_links().iter().map(|s| s.as_str()).collect())
+                .unwrap_or_default();
+            (target.as_str(), outbound)
+        })
+        .collect();
+
+    // folder:'s reference point, computed once. The per-note path work only
+    // runs when a folder token is actually present.
+    let needs_folder_path =
+        q.folder.is_some() || !q.exclude_folders.is_empty() || q.foldered_only || q.root_only;
+    let root_lower = root.map(|r| r.to_string_lossy().replace('\\', "/").to_lowercase());
+
     notes
         .iter()
         .filter_map(|note| {
@@ -544,6 +809,37 @@ fn matched<'a>(notes: &'a [Note], group: &str, ctx: &SearchContext) -> Vec<(&'a 
             if q.inbox_excluded && is_inbox_note(note) {
                 return None;
             }
+            if needs_folder_path {
+                let folder_path = relative_folder_path(note, root_lower.as_deref());
+                if q.foldered_only && folder_path.is_empty() {
+                    return None;
+                }
+                if q.root_only && !folder_path.is_empty() {
+                    return None;
+                }
+                if let Some(f) = &q.folder {
+                    if !folder_matches(&folder_path, f) {
+                        return None;
+                    }
+                }
+                if !q.exclude_folders.is_empty()
+                    && q.exclude_folders.iter().any(|f| folder_matches(&folder_path, f))
+                {
+                    return None;
+                }
+            }
+            if q.image_only && !note.has_image_embed() {
+                return None;
+            }
+            if q.image_excluded && note.has_image_embed() {
+                return None;
+            }
+            if q.embed_only && !note.has_note_embed() {
+                return None;
+            }
+            if q.embed_excluded && note.has_note_embed() {
+                return None;
+            }
             if let Some(link) = &q.link {
                 if !note.wiki_links().contains(link) {
                     return None;
@@ -553,6 +849,38 @@ fn matched<'a>(notes: &'a [Note], group: &str, ctx: &SearchContext) -> Vec<(&'a 
                 && note.wiki_links().iter().any(|l| q.exclude_links.contains(l))
             {
                 return None;
+            }
+            if let Some(target) = &q.interlink {
+                // Connected in either direction, excluding the hub note itself —
+                // the footer for X lists X's neighbours, not X.
+                let connected = note.wiki_links().iter().any(|l| l == target)
+                    || interlink_outbound.contains(note.lowercased_title());
+                if !connected || note.lowercased_title() == target {
+                    return None;
+                }
+            }
+            if !exclude_interlink_outbound.is_empty() {
+                let excluded = exclude_interlink_outbound.iter().any(|(target, outbound)| {
+                    note.wiki_links().iter().any(|l| l == target)
+                        || outbound.contains(note.lowercased_title())
+                });
+                if excluded {
+                    return None;
+                }
+            }
+            if q.ghost_only || q.ghost_excluded {
+                // A ghost link's target answers to no note — an image
+                // attachment reference never counts, since it isn't a note.
+                let has_ghost = note.wiki_links().iter().any(|target| {
+                    !all_note_titles.contains(target.as_str())
+                        && !crate::note::is_image_attachment(target)
+                });
+                if q.ghost_only && !has_ghost {
+                    return None;
+                }
+                if q.ghost_excluded && has_ghost {
+                    return None;
+                }
             }
             if q.orphan_only || q.linked_only {
                 let is_orphan = note.wiki_links().is_empty()
@@ -590,8 +918,26 @@ fn matched<'a>(notes: &'a [Note], group: &str, ctx: &SearchContext) -> Vec<(&'a 
             if q.todo_excluded && note.has_unchecked_task() {
                 return None;
             }
+            if !q.title_terms.is_empty() {
+                let title = note.lowercased_title();
+                if !q.title_terms.iter().all(|term| fast_contains(title, term)) {
+                    return None;
+                }
+            }
+            if !q.exclude_titles.is_empty() {
+                let title = note.lowercased_title();
+                if q.exclude_titles.iter().any(|term| fast_contains(title, term)) {
+                    return None;
+                }
+            }
+            if q.tagged_only && note.tags().is_empty() {
+                return None;
+            }
+            if q.untagged_only && !note.tags().is_empty() {
+                return None;
+            }
             if let Some(tag) = &q.tag {
-                if !note.tags().iter().any(|t| fast_contains(t, tag)) {
+                if !note.tags().iter().any(|t| tag_matches(t, tag)) {
                     return None;
                 }
             }
@@ -599,7 +945,7 @@ fn matched<'a>(notes: &'a [Note], group: &str, ctx: &SearchContext) -> Vec<(&'a 
                 && note
                     .tags()
                     .iter()
-                    .any(|t| q.exclude_tags.iter().any(|x| fast_contains(t, x)))
+                    .any(|t| q.exclude_tags.iter().any(|x| tag_matches(t, x)))
             {
                 return None;
             }
@@ -687,23 +1033,28 @@ fn ranked_higher_first(a: &(&Note, i32), b: &(&Note, i32)) -> std::cmp::Ordering
     b.1.cmp(&a.1).then(b.0.modified.cmp(&a.0.modified))
 }
 
-pub fn filtered<'a>(notes: &'a [Note], query: &str, ctx: &SearchContext) -> Vec<&'a Note> {
+/// `root` is the Index's own directory, needed so `folder:` can resolve a
+/// note's path relative to the vault. `None` falls back to matching the
+/// immediate parent folder's name — enough for a flat search, and what the
+/// tests without a real vault use.
+pub fn filtered<'a>(
+    notes: &'a [Note],
+    query: &str,
+    ctx: &SearchContext,
+    root: Option<&Path>,
+) -> Vec<&'a Note> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return notes.iter().collect();
     }
 
-    let groups: Vec<&str> = trimmed
-        .split(',')
-        .map(|g| g.trim())
-        .filter(|g| !g.is_empty())
-        .collect();
+    let groups = split_groups(trimmed);
     if groups.is_empty() {
         return notes.iter().collect();
     }
 
     if groups.len() == 1 {
-        let mut hits = matched(notes, groups[0], ctx);
+        let mut hits = matched(notes, &groups[0], ctx, root);
         hits.sort_by(ranked_higher_first);
         return hits.into_iter().map(|(n, _)| n).collect();
     }
@@ -711,8 +1062,8 @@ pub fn filtered<'a>(notes: &'a [Note], query: &str, ctx: &SearchContext) -> Vec<
     // Several groups OR together, each note keeping its best score across the
     // groups that matched it.
     let mut best: HashMap<&str, (&Note, i32)> = HashMap::new();
-    for group in groups {
-        for (note, score) in matched(notes, group, ctx) {
+    for group in &groups {
+        for (note, score) in matched(notes, group, ctx, root) {
             best.entry(note.id())
                 .and_modify(|e| e.1 = e.1.max(score))
                 .or_insert((note, score));
@@ -750,7 +1101,16 @@ mod tests {
     }
 
     fn titles(notes: &[Note], query: &str) -> Vec<String> {
-        filtered(notes, query, &ctx())
+        filtered(notes, query, &ctx(), None)
+            .into_iter()
+            .map(|n| n.title().to_string())
+            .collect()
+    }
+
+    /// For folder: tests, which need a real Index root to resolve paths
+    /// against. `C:/Index` matches the ids the `note` helper builds.
+    fn titles_rooted(notes: &[Note], query: &str) -> Vec<String> {
+        filtered(notes, query, &ctx(), Some(Path::new("C:/Index")))
             .into_iter()
             .map(|n| n.title().to_string())
             .collect()
@@ -1100,5 +1460,163 @@ mod tests {
             note("DropB", "#dropb"),
         ];
         assert_eq!(titles(&notes, "-tag:dropa -tag:dropb"), vec!["Keep"]);
+    }
+
+    // --- 1.8.x operators ----------------------------------------------------
+
+    /// A note filed in `Projects/Work` — the `note` helper only makes root
+    /// notes, so folder tests build their own paths under `C:/Index`.
+    fn note_in(folder: &str, title: &str, content: &str) -> Note {
+        Note::new(
+            format!("C:/Index/{folder}/{title}.md"),
+            content,
+            SystemTime::UNIX_EPOCH,
+        )
+    }
+
+    #[test]
+    fn folder_matches_partial_and_by_any_segment() {
+        let notes = vec![
+            note("Root", "x"),
+            note_in("Projects", "A", "x"),
+            note_in("Projects/Work", "B", "x"),
+            note_in("Archive", "C", "x"),
+        ];
+        // Partial, case-insensitive, against the whole relative path.
+        let mut got = titles_rooted(&notes, "folder:proj");
+        got.sort();
+        assert_eq!(got, vec!["A", "B"]);
+        // Findable by a nested segment.
+        assert_eq!(titles_rooted(&notes, "folder:work"), vec!["B"]);
+    }
+
+    #[test]
+    fn folder_quoted_is_exact_or_descendant() {
+        let notes = vec![
+            note_in("Work", "A", "x"),
+            note_in("Work/Deep", "B", "x"),
+            note_in("Workshop", "C", "x"),
+        ];
+        // Bare "work" is a substring match — it also catches Workshop.
+        let mut bare = titles_rooted(&notes, "folder:work");
+        bare.sort();
+        assert_eq!(bare, vec!["A", "B", "C"]);
+        // Quoted demands exactness: Work and its descendants, never Workshop.
+        let mut exact = titles_rooted(&notes, "folder:\"work\"");
+        exact.sort();
+        assert_eq!(exact, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn bare_folder_is_anything_nested_and_minus_folder_is_the_root() {
+        let notes = vec![
+            note("AtRoot", "x"),
+            note_in("Projects", "Nested", "x"),
+        ];
+        assert_eq!(titles_rooted(&notes, "folder:"), vec!["Nested"]);
+        assert_eq!(titles_rooted(&notes, "-folder:"), vec!["AtRoot"]);
+    }
+
+    #[test]
+    fn tag_quoted_is_exact() {
+        let notes = vec![note("A", "#tag"), note("B", "#tags")];
+        // Bare partial catches both.
+        let mut bare = titles(&notes, "tag:tag");
+        bare.sort();
+        assert_eq!(bare, vec!["A", "B"]);
+        // Quoted matches only the exact tag.
+        assert_eq!(titles(&notes, "tag:\"tag\""), vec!["A"]);
+    }
+
+    #[test]
+    fn bare_tag_is_any_tagged_and_minus_tag_is_untagged() {
+        let notes = vec![note("Tagged", "#x here"), note("Plain", "no tags")];
+        assert_eq!(titles(&notes, "tag:"), vec!["Tagged"]);
+        assert_eq!(titles(&notes, "-tag:"), vec!["Plain"]);
+    }
+
+    #[test]
+    fn title_matches_titles_only_not_bodies() {
+        let notes = vec![
+            note("Rust guide", "nothing relevant"),
+            note("Other", "a long note about rust internals"),
+        ];
+        // Plain search would match both; title: only the one named for it.
+        assert_eq!(titles(&notes, "title:rust"), vec!["Rust guide"]);
+        // Several title: terms AND together.
+        assert_eq!(titles(&notes, "title:rust title:guide"), vec!["Rust guide"]);
+        // -title: excludes.
+        assert_eq!(titles(&notes, "rust -title:guide"), vec!["Other"]);
+    }
+
+    #[test]
+    fn interlink_connects_in_both_directions() {
+        let notes = vec![
+            note("Hub", "links to [[Downstream]]"),
+            note("Upstream", "points at [[Hub]]"),
+            note("Downstream", "leaf"),
+            note("Unrelated", "nothing"),
+        ];
+        // Both the note linking *to* Hub and the note Hub links *out* to,
+        // excluding Hub itself.
+        let mut got = titles(&notes, "interlink:Hub");
+        got.sort();
+        assert_eq!(got, vec!["Downstream", "Upstream"]);
+    }
+
+    #[test]
+    fn interlink_degrades_to_inbound_when_target_absent() {
+        let notes = vec![note("A", "see [[Ghost]]"), note("B", "unrelated")];
+        // No note named Ghost, so only the inbound half survives.
+        assert_eq!(titles(&notes, "interlink:Ghost"), vec!["A"]);
+    }
+
+    #[test]
+    fn ghost_finds_unresolved_links_only() {
+        let notes = vec![
+            note("Keeper", "see [[Real]]"),
+            note("Real", "exists"),
+            note("Promiser", "see [[Nonexistent]]"),
+        ];
+        assert_eq!(titles(&notes, "ghost:"), vec!["Promiser"]);
+        // -ghost: is the complement: notes whose links all resolve. "Real" has
+        // no links at all, which also counts as "nothing unresolved".
+        let mut resolved = titles(&notes, "-ghost:");
+        resolved.sort();
+        assert_eq!(resolved, vec!["Keeper", "Real"]);
+    }
+
+    #[test]
+    fn ghost_ignores_image_embeds() {
+        // An image target is not a note, so it must not read as a ghost link.
+        let notes = vec![note("HasImage", "![[diagram.png]] and text")];
+        assert!(titles(&notes, "ghost:").is_empty());
+    }
+
+    #[test]
+    fn img_and_embed_tell_the_two_kinds_apart() {
+        let notes = vec![
+            note("Picture", "![[photo.jpg]]"),
+            note("Transclusion", "![[Another Note]]"),
+            note("Plain", "no embeds"),
+        ];
+        assert_eq!(titles(&notes, "img:"), vec!["Picture"]);
+        assert_eq!(titles(&notes, "embed:"), vec!["Transclusion"]);
+        assert!(!titles(&notes, "-img:").contains(&"Picture".to_string()));
+    }
+
+    #[test]
+    fn comma_inside_a_quoted_argument_does_not_split_the_query() {
+        let notes = vec![
+            note("Debrief (Sep 24, 2025)", "the hub"),
+            note("Linker", "see [[Debrief (Sep 24, 2025)]]"),
+            note("Unrelated", "x"),
+        ];
+        // The comma is inside the quotes, so this is one interlink: group, not
+        // two OR groups. Under the old naive split it fell apart.
+        assert_eq!(
+            titles(&notes, "interlink:\"Debrief (Sep 24, 2025)\""),
+            vec!["Linker"]
+        );
     }
 }

@@ -151,7 +151,7 @@ fn search(query: String, state: State<AppState>) -> Vec<NoteDto> {
     let store = state.store.lock().unwrap();
     let root = store.directory().to_path_buf();
     let ctx = SearchContext::now();
-    envy_core::filtered(store.notes(), &query, &ctx)
+    envy_core::filtered(store.notes(), &query, &ctx, Some(&root))
         .into_iter()
         .map(|n| NoteDto::from_note(n, false, &root))
         .collect()
@@ -592,6 +592,21 @@ fn all_tags(state: State<AppState>) -> Vec<String> {
     let mut tags: Vec<_> = counts.into_iter().collect();
     tags.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
     tags.into_iter().map(|(t, _)| t).collect()
+}
+
+/// Every note's title, newest first — for the search box's autofill of the
+/// title-taking operators (`link:`, `interlink:`, `title:`). The store already
+/// holds notes in modified-descending order, so this is just a projection.
+#[tauri::command]
+fn all_titles(state: State<AppState>) -> Vec<String> {
+    state
+        .store
+        .lock()
+        .unwrap()
+        .notes()
+        .iter()
+        .map(|n| n.title().to_string())
+        .collect()
 }
 
 #[tauri::command]
@@ -1516,6 +1531,7 @@ pub fn run() {
             create_inbox_note,
             inbox_count,
             all_tags,
+            all_titles,
             submit_from_inbox,
             set_include_subfolders,
             reveal_index,

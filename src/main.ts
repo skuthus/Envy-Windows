@@ -27,6 +27,7 @@ import {
   dueTokenAt,
   toggleDueToken,
 } from './input'
+import { editorCompletion, completionSources, ghostRemainderForTest } from './completion'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 import { createMiniNoteEditor, type MiniNoteEditor } from './mininote'
 import { renderReference, type ReferenceTab } from './reference'
@@ -133,6 +134,11 @@ const view = new EditorView({
       emphasisKeys.of(keymap.of(emphasisKeymap(bindingFor('bold'), bindingFor('italic')))),
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
+      // Ghost-text completion for [[links]] and #tags, drawing from the same
+      // title/tag lists the search box completes from. Read through a closure
+      // so it tracks edits without the editor being reconfigured.
+      editorCompletion,
+      completionSources.of(() => ({ titles: knownTitles, tags: knownTags })),
       completionTransforms,
       autoPairing,
       searchQueryField,
@@ -1619,9 +1625,7 @@ async function runSearch() {
   trashResults = []
   templateResults = []
   trashPreviewEl.classList.add('hidden')
-  void invoke<string[]>('all_tags').then((t) => {
-    knownTags = t
-  })
+  void refreshCompletionSources()
   results = await invoke<NoteDto[]>('search', { query: searchInput.value })
   // Fleeting notes can be kept out of the way until you go looking for them.
   // Never hidden when the query is already about the inbox, though — asking
@@ -2183,9 +2187,13 @@ function containsSearchOperator(query: string): boolean {
     .some((raw) => {
       const w = raw.toLowerCase()
       return (
-        /^-?(tag|date|stale|due|link|template|trash|inbox|ai):/.test(w) ||
+        /^-?(tag|date|stale|due|link|interlink|folder|title|img|embed|template|trash|inbox|ai):/.test(
+          w,
+        ) ||
         w === 'orphan:' ||
         w === 'linked:' ||
+        w === 'ghost:' ||
+        w === '-ghost:' ||
         w === 'todo:' ||
         w === '-todo:' ||
         w === '-ai:' ||
@@ -2285,24 +2293,97 @@ async function captureToInbox(title: string) {
 
 const searchGhostEl = document.getElementById('search-ghost')!
 let knownTags: string[] = []
+let knownFolders: string[] = []
+let knownTitles: string[] = []
 
+/// Which operators complete their argument as you type, and where each draws
+/// its suggestions from — matching the Mac's 1.8.4 autofill. `tag:`/`folder:`
+/// complete from your real lists; `link:`/`interlink:`/`title:` complete note
+/// titles by recency.
+///
+/// The `-` polarity of each completes too: excluding a folder or tag you have
+/// wants the same help as including it.
+interface CompletionSpec {
+  /// Case-sensitivity of the source. Tags and folders are matched lowercased
+  /// (that's how the operators match); titles keep their case so the ghost
+  /// reads as the real title.
+  source: () => string[]
+  lower: boolean
+}
+
+const COMPLETION_OPERATORS: Record<string, CompletionSpec> = {
+  'tag:': { source: () => knownTags, lower: true },
+  'folder:': { source: () => knownFolders, lower: true },
+  'link:': { source: () => knownTitles, lower: false },
+  'interlink:': { source: () => knownTitles, lower: false },
+  'title:': { source: () => knownTitles, lower: false },
+}
+
+/// Refreshes the autofill sources. Folders and titles change as notes are
+/// edited or moved, and an in-app move is suppressed from the watcher, so this
+/// runs on each search rather than only on an external change — all three are
+/// cheap (a tag/title projection, a shallow dir walk).
+async function refreshCompletionSources() {
+  try {
+    ;[knownTags, knownFolders, knownTitles] = await Promise.all([
+      invoke<string[]>('all_tags'),
+      invoke<string[]>('list_subfolders'),
+      invoke<string[]>('all_titles'),
+    ])
+  } catch (err) {
+    console.error('could not refresh autofill sources', err)
+  }
+}
+
+/// The completion (the part after what's typed) for the operator argument being
+/// typed at the very end of the box, or null.
+///
+/// Only the token at the caret, and only when the caret is at the end — a ghost
+/// offered mid-string would insert where the caret isn't. The whole argument is
+/// matched, spaces included, so `link:Rust Gu` completes a multi-word title;
+/// the accept step re-quotes anything with a space.
 function ghostCompletion(): string | null {
   const value = searchInput.value
-  // Only completes the token being typed, and only at the very end — a
-  // completion offered mid-string would insert where the caret isn't.
   if (searchInput.selectionStart !== value.length) return null
-  const m = value.match(/(^|\s)-?tag:([A-Za-z0-9_-]*)$/)
-  if (!m) return null
-  const fragment = m[2].toLowerCase()
-  if (!fragment) return null
-  const hit = knownTags.find((t) => t.startsWith(fragment) && t !== fragment)
-  return hit ? hit.slice(fragment.length) : null
+  for (const [op, spec] of Object.entries(COMPLETION_OPERATORS)) {
+    // The argument runs from the operator to the end of the box. Preceded by
+    // start-or-space, and an optional `-`, and an optional opening quote.
+    const re = new RegExp(`(^|\\s)-?${op}"?(.*)$`)
+    const m = value.match(re)
+    if (!m) continue
+    const fragment = m[2]
+    if (!fragment) return null
+    const needle = spec.lower ? fragment.toLowerCase() : fragment
+    const pool = spec.source()
+    const hit = pool.find((candidate) => {
+      const c = spec.lower ? candidate.toLowerCase() : candidate
+      return c.startsWith(needle) && c !== needle
+    })
+    return hit ? hit.slice(fragment.length) : null
+  }
+  return null
 }
 
 function renderGhost() {
   const rest = ghostCompletion()
   searchGhostEl.textContent = rest ? searchInput.value + rest : ''
   searchGhostEl.classList.toggle('hidden', !rest)
+}
+
+/// The box's value with the current ghost accepted, quoting the argument if the
+/// completed value contains a space.
+///
+/// The quote isn't cosmetic: an unquoted space would tokenize `folder:Client
+/// Work` into two terms. It also flips the argument to the operators' *exact*
+/// match, which is the right default for a name you picked whole from a list —
+/// clicking a real folder should mean that folder, not a substring of it.
+function acceptCompletion(): string {
+  const rest = ghostCompletion()
+  if (rest === null) return searchInput.value
+  const completed = searchInput.value + rest
+  const m = completed.match(/^(.*?(?:^|\s)-?(?:tag|folder|link|interlink|title):)"?(.*)$/)
+  if (!m || !m[2].includes(' ')) return completed
+  return `${m[1]}"${m[2]}"`
 }
 
 searchInput.addEventListener('input', () => {
@@ -2348,7 +2429,7 @@ searchInput.addEventListener('keydown', (e) => {
     // already at the end, so "move right" and "take the suggestion" are the
     // same gesture there.
     e.preventDefault()
-    searchInput.value += ghostCompletion()
+    searchInput.value = acceptCompletion()
     renderGhost()
     void runSearch()
   } else if (e.key === 'Backspace' && e.altKey) {
@@ -3329,9 +3410,18 @@ async function boot() {
   extendSelection,
   fullSelection,
   ghostCompletion,
+  acceptCompletion,
   setTagsForTest: (t: string[]) => {
     knownTags = t
   },
+  setCompletionSourcesForTest: (tags: string[], folders: string[], titles: string[]) => {
+    knownTags = tags
+    knownFolders = folders
+    knownTitles = titles
+  },
+  // The editor ghost completion, decided on the live editor state (no focus
+  // needed, unlike the on-screen widget).
+  editorGhostForTest: () => ghostRemainderForTest(view.state),
   setResultsForTest: (r: NoteDto[]) => {
     results = r
     multiSelected.clear()

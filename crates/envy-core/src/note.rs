@@ -78,6 +78,31 @@ static TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#([A-Za-z0-9_-]+)
 static WIKI_LINK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\[\[([^\[\]]+)\]\]").unwrap());
 
+/// The `![[…]]` embed marker. Both an image and a note transclusion use it —
+/// which is which is decided by the target's extension, against
+/// [`IMAGE_ATTACHMENT_EXTENSIONS`].
+static EMBED_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"!\[\[([^\[\]]+)\]\]").unwrap());
+
+/// The extensions that make an `![[…]]` an image rather than a note embed.
+///
+/// The single source of truth for that split — the styler reads the same set,
+/// so search and the editor never disagree on what counts as an image. Kept in
+/// step with the Mac's `Note.imageAttachmentExtensions`.
+pub static IMAGE_ATTACHMENT_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "heic", "heif", "tiff", "tif", "bmp",
+];
+
+/// Whether `name` (an embed target, size and caption already stripped) points
+/// at an image rather than another note.
+pub fn is_image_attachment(name: &str) -> bool {
+    name.rsplit('.')
+        .next()
+        .filter(|ext| *ext != name) // no extension at all → not an image
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|ext| IMAGE_ATTACHMENT_EXTENSIONS.contains(&ext.as_str()))
+}
+
 static AI_SIGNATURE_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^⎈[ \t]+(created|edited)\b").unwrap());
 
@@ -116,6 +141,10 @@ struct NoteDerived {
     tags: OnceLock<BTreeSet<String>>,
     wiki_links: OnceLock<BTreeSet<String>>,
     has_unchecked_task: OnceLock<bool>,
+    /// `(has_image_embed, has_note_embed)` — both derived in one pass over the
+    /// `![[…]]` markers, behind a cheap `contains` early-out so a note with no
+    /// embed at all pays nothing.
+    embed_kinds: OnceLock<(bool, bool)>,
     preview: OnceLock<String>,
     active_due_dates: OnceLock<Vec<NaiveDate>>,
     ai_provenance: OnceLock<AiProvenance>,
@@ -277,6 +306,44 @@ impl Note {
                 .ok()
                 .flatten()
                 .is_some()
+        })
+    }
+
+    /// Whether the note embeds at least one image — backs the `img:` operator.
+    pub fn has_image_embed(&self) -> bool {
+        self.embed_kinds().0
+    }
+
+    /// Whether the note transcludes at least one other note — backs `embed:`.
+    pub fn has_note_embed(&self) -> bool {
+        self.embed_kinds().1
+    }
+
+    /// `(image, note)`, computed once over the `![[…]]` markers. The `contains`
+    /// guard is the whole reason this is cheap: the majority of notes have no
+    /// `![[` at all and never touch the regex.
+    fn embed_kinds(&self) -> (bool, bool) {
+        *self.derived.embed_kinds.get_or_init(|| {
+            if !self.content.contains("![[") {
+                return (false, false);
+            }
+            let mut has_image = false;
+            let mut has_note = false;
+            for caps in EMBED_RE.captures_iter(&self.content).filter_map(|c| c.ok()) {
+                let Some(inner) = caps.get(1) else { continue };
+                // The name is everything up to the first `|` — the size and
+                // caption slots, if any, come after it.
+                let name = inner.as_str().split('|').next().unwrap_or("");
+                if is_image_attachment(name) {
+                    has_image = true;
+                } else {
+                    has_note = true;
+                }
+                if has_image && has_note {
+                    break;
+                }
+            }
+            (has_image, has_note)
         })
     }
 

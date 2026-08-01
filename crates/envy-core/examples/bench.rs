@@ -58,11 +58,14 @@ fn main() {
         "orphan:",
         "ai:created",
         "inbox:",
+        "folder:",
+        "ghost:",
+        "title:notes",
         "press, ink, paper",
     ] {
         let label = if query.is_empty() { "(empty query)" } else { query };
         time(&format!("search {label:?}"), 20, || {
-            envy_core::filtered(notes, query, &ctx).len()
+            envy_core::filtered(notes, query, &ctx, Some(std::path::Path::new(&dir))).len()
         });
     }
 
