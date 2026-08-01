@@ -135,6 +135,48 @@ fn default_index_directory() -> PathBuf {
         .join("Envy")
 }
 
+/// Where the chosen Index path is remembered between launches.
+///
+/// A plain file under the app's config directory, holding one path. The Mac
+/// keeps this in UserDefaults under `indexPath`; on Windows the config file is
+/// the equivalent, and — unlike the frontend's localStorage — it can be read in
+/// Rust's `setup`, before any window exists, so the right vault opens straight
+/// away rather than opening the default and switching afterwards.
+fn index_path_file(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join("index-path"))
+}
+
+/// The Index to open on launch: the remembered one, or the default.
+///
+/// Mirrors the Mac's `IndexPreference.load()`, including its self-heal: a
+/// missing or empty record resolves to the default *and* is written back, so
+/// the file always names a real choice after the first run.
+fn persisted_index_directory(app: &tauri::AppHandle) -> PathBuf {
+    if let Some(file) = index_path_file(app) {
+        if let Ok(raw) = std::fs::read_to_string(&file) {
+            let trimmed = raw.trim();
+            if !trimmed.is_empty() {
+                return PathBuf::from(trimmed);
+            }
+        }
+    }
+    let fallback = default_index_directory();
+    save_index_directory(app, &fallback);
+    fallback
+}
+
+/// Records `dir` as the Index to open next time. Best-effort: a failure here
+/// costs the persistence, not the switch, so the current session is unaffected.
+fn save_index_directory(app: &tauri::AppHandle, dir: &Path) {
+    let Some(file) = index_path_file(app) else {
+        return;
+    };
+    if let Some(parent) = file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&file, dir.to_string_lossy().as_bytes());
+}
+
 #[tauri::command]
 fn index_directory(state: State<AppState>) -> String {
     state
@@ -441,6 +483,9 @@ fn set_index_directory(
     let store = NoteStore::open(&path, include_subfolders).map_err(|e| e.to_string())?;
     let count = store.notes().len();
     *state.store.lock().unwrap() = store;
+    // Remembered for next launch, so the choice sticks rather than resetting to
+    // the default folder every restart.
+    save_index_directory(&app, Path::new(&path));
     // The old watcher is still pointed at the previous folder; replacing it is
     // what makes external edits in the new one register at all.
     let handle = app.clone();
@@ -1441,8 +1486,20 @@ pub fn run() {
             None,
         ))
         .setup(|app| {
-            let dir = default_index_directory();
-            let store = NoteStore::open(&dir, false)?;
+            // The Index the user last chose, or the default on a fresh install.
+            // A saved path can go unreachable — a folder on a drive that isn't
+            // plugged in — so a failure to open it falls back to the default
+            // rather than refusing to start. The default itself is created on
+            // demand by `open`, so it can't fail the same way.
+            let mut dir = persisted_index_directory(app.handle());
+            let store = match NoteStore::open(&dir, false) {
+                Ok(store) => store,
+                Err(_) => {
+                    dir = default_index_directory();
+                    save_index_directory(app.handle(), &dir);
+                    NoteStore::open(&dir, false)?
+                }
+            };
             // A brand-new Index gets a welcome note, so the first launch isn't
             // an empty window with no hint of what to type.
             if store.notes().is_empty() {
