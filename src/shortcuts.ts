@@ -30,6 +30,7 @@ export type ShortcutId =
   | 'showPinnedNote'
   | 'unpinFromTray'
   | 'keepOnTop'
+  | 'insertImage'
 
 export interface ShortcutSpec {
   id: ShortcutId
@@ -57,6 +58,10 @@ export const SHORTCUT_SPECS: ShortcutSpec[] = [
   // The Mac's ⌥⌘N. It makes a note, so it sits beside the other "new"
   // shortcuts rather than the formatting ones.
   { id: 'extractToNote', label: 'Extract Selection to New Note', default: 'Ctrl+Alt+N', editor: true },
+  // The Mac's ⇧⌘I can't map here: Ctrl+I is Italic and Ctrl+Shift+I is the
+  // WebView2 devtools chord. Ctrl+Alt+I keeps the "I for image" mnemonic and
+  // sits with the other Ctrl+Alt editor actions (Extract, pins). Remappable.
+  { id: 'insertImage', label: 'Insert Image', default: 'Ctrl+Alt+I' },
   { id: 'deleteNote', label: 'Delete Note', default: 'Ctrl+Backspace' },
   { id: 'restoreDeletedNote', label: 'Restore Deleted Note', default: 'Ctrl+Shift+Backspace' },
   { id: 'togglePin', label: 'Pin/Unpin Note', default: 'Ctrl+Alt+P' },

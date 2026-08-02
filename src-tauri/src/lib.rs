@@ -501,6 +501,13 @@ fn reveal_attachment(name: String, state: State<AppState>) -> Result<(), String>
     reveal_path(&path)
 }
 
+/// Every image already in the vault, newest first — the Insert Image picker
+/// reads bytes for each with `read_attachment` to show a thumbnail.
+#[tauri::command]
+fn list_image_attachments(state: State<AppState>) -> Vec<String> {
+    state.store.lock().unwrap().image_attachments()
+}
+
 /// Every folder under the Index a note could be filed into, for the "Move to"
 /// menu. Walked fresh each time the menu opens rather than cached — folders
 /// change from outside Envy as easily as from within it.
@@ -1971,6 +1978,7 @@ pub fn run() {
             open_attachment,
             rename_attachment,
             reveal_attachment,
+            list_image_attachments,
             check_for_updates,
             reveal_folder,
             set_index_directory,

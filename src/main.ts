@@ -701,6 +701,111 @@ async function renameAttachment(oldName: string) {
   await reloadOpenNoteFromDisk()
 }
 
+// --- Insert Image picker -----------------------------------------------------
+// A grid of every image already in the vault, so one can be re-inserted by sight
+// rather than by remembering a name like "Pasted image 3.png". Mirrors the Mac's
+// ImageAttachmentPicker (⇧⌘I / right-click → Insert Image…).
+const imagePickerEl = document.getElementById('image-picker')!
+const imagePickerFilterEl = document.getElementById('image-picker-filter') as HTMLInputElement
+const imagePickerGridEl = document.getElementById('image-picker-grid')!
+const imagePickerEmptyEl = document.getElementById('image-picker-empty')!
+let imagePickerNames: string[] = []
+let imagePickerUrls: string[] = []
+// Filtering rebuilds the grid; a bumped generation makes a slow thumbnail load
+// from a superseded build (or after close) drop its result instead of leaking.
+let imagePickerGen = 0
+
+async function openImagePicker() {
+  if (!openNoteId && !openTemplatePath) return
+  imagePickerNames = await invoke<string[]>('list_image_attachments')
+  imagePickerFilterEl.value = ''
+  buildImagePickerGrid('')
+  imagePickerEl.classList.remove('hidden')
+  imagePickerFilterEl.focus()
+}
+
+function closeImagePicker() {
+  if (imagePickerEl.classList.contains('hidden')) return
+  imagePickerGen++
+  imagePickerEl.classList.add('hidden')
+  imagePickerGridEl.replaceChildren()
+  for (const url of imagePickerUrls) URL.revokeObjectURL(url)
+  imagePickerUrls = []
+  view.focus()
+}
+
+function imagePickerMatches(filter: string): string[] {
+  const needle = filter.trim().toLowerCase()
+  return needle ? imagePickerNames.filter((n) => n.toLowerCase().includes(needle)) : imagePickerNames
+}
+
+function buildImagePickerGrid(filter: string) {
+  const gen = ++imagePickerGen
+  for (const url of imagePickerUrls) URL.revokeObjectURL(url)
+  imagePickerUrls = []
+  imagePickerGridEl.replaceChildren()
+  const matches = imagePickerMatches(filter)
+  if (matches.length === 0) {
+    imagePickerEmptyEl.textContent =
+      imagePickerNames.length === 0
+        ? 'No images yet. Drag or paste a picture into a note first.'
+        : 'No matches.'
+    imagePickerEmptyEl.classList.remove('hidden')
+    return
+  }
+  imagePickerEmptyEl.classList.add('hidden')
+  for (const name of matches) {
+    const cell = document.createElement('button')
+    cell.type = 'button'
+    cell.className = 'image-picker-cell'
+    const thumb = document.createElement('div')
+    thumb.className = 'thumb'
+    const img = document.createElement('img')
+    img.alt = name
+    img.loading = 'lazy'
+    thumb.append(img)
+    const label = document.createElement('div')
+    label.className = 'name'
+    label.textContent = name
+    cell.append(thumb, label)
+    cell.addEventListener('click', () => pickImage(name))
+    imagePickerGridEl.append(cell)
+    void invoke<ArrayBuffer>('read_attachment', { name })
+      .then((bytes) => {
+        if (gen !== imagePickerGen) return // superseded build or closed
+        const url = URL.createObjectURL(new Blob([bytes]))
+        imagePickerUrls.push(url)
+        img.src = url
+      })
+      .catch(() => {
+        /* a missing file just shows an empty thumb */
+      })
+  }
+}
+
+function pickImage(name: string) {
+  closeImagePicker()
+  insertImageReference(name, view)
+}
+
+imagePickerFilterEl.addEventListener('input', () => buildImagePickerGrid(imagePickerFilterEl.value))
+imagePickerFilterEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    // Return inserts the first match — the quick path when you half-remember the
+    // name; otherwise click a thumbnail.
+    e.preventDefault()
+    const first = imagePickerMatches(imagePickerFilterEl.value)[0]
+    if (first) pickImage(first)
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    e.stopPropagation()
+    closeImagePicker()
+  }
+})
+imagePickerEl.addEventListener('click', (e) => {
+  if (e.target === imagePickerEl) closeImagePicker() // click the backdrop to dismiss
+})
+
 /// Saves a pasted image blob to Attachments/ and drops in its reference. The
 /// bytes go over as a plain array — a paste is one-off and images are modest, so
 /// the simplicity is worth more than shaving the IPC.
@@ -1023,9 +1128,21 @@ editorEl.addEventListener('click', (e) => {
 })
 
 editorEl.addEventListener('contextmenu', (e) => {
+  // An image widget runs its own menu (size/rename/reveal); leave it be.
+  if ((e.target as HTMLElement).closest('.envy-image-embed')) return
   const pill = (e.target as HTMLElement).closest('.envy-url-pill') as HTMLElement | null
   const domain = pill?.dataset.domain
-  if (!domain) return
+  // Off a pill, the plain editor menu — just "Insert Image…" for now, so the
+  // picker has a discoverable home besides the shortcut.
+  if (!domain) {
+    if (!openNoteId && !openTemplatePath) return
+    e.preventDefault()
+    e.stopPropagation()
+    openContextMenu(e.clientX, e.clientY, [
+      { label: 'Insert Image…', run: () => void openImagePicker() },
+    ])
+    return
+  }
   e.preventDefault()
   e.stopPropagation()
   const current = domainEmojis()[domain]
@@ -3512,6 +3629,7 @@ const SHORTCUT_HANDLERS: Partial<Record<ShortcutId, () => void>> = {
     void runSearch()
   },
   extractToNote: () => void extractSelectionToNote(),
+  insertImage: () => void openImagePicker(),
   focusNextArea: () => {
     if (document.activeElement === searchInput) view.focus()
     else searchInput.focus()

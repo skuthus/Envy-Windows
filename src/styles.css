@@ -1429,6 +1429,104 @@ body.popout-window {
 }
 #prompt-ok:hover { background: color-mix(in srgb, var(--envy-link) 28%, transparent); }
 
+/* Insert Image picker: a grid of thumbnails over the usual dim backdrop. */
+#image-picker {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 30;
+}
+#image-picker.hidden { display: none; }
+#image-picker-panel {
+  width: min(480px, 90vw);
+  height: min(440px, 82vh);
+  border-radius: 12px;
+  background: var(--envy-title-bar-background);
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 45%, transparent);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#image-picker-search {
+  padding: 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--envy-marker) 30%, transparent);
+}
+#image-picker-filter {
+  width: 100%;
+  font: inherit;
+  font-size: 13px;
+  padding: 6px 9px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: var(--envy-background);
+  color: var(--envy-text);
+}
+#image-picker-filter:focus {
+  outline: none;
+  border-color: var(--envy-link);
+}
+#image-picker-grid {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 12px;
+  padding: 12px;
+  align-content: start;
+}
+#image-picker-grid:empty { display: none; }
+.image-picker-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--envy-text);
+}
+.image-picker-cell .thumb {
+  height: 84px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--envy-marker) 10%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.image-picker-cell img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.image-picker-cell .name {
+  font-size: 11px;
+  line-height: 1.3;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.image-picker-cell:hover .thumb {
+  outline: 2px solid var(--envy-link);
+}
+#image-picker-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  color: var(--envy-blockquote);
+  font-size: 13px;
+  padding: 20px;
+}
+#image-picker-empty.hidden { display: none; }
+
 /* Tags beside the note title. Clickable, because a tag you can see and can't
    search on is a dead end. */
 /* The tag chips are their own flow inside the bar, so a note with many tags

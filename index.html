@@ -116,6 +116,26 @@
         </form>
       </div>
 
+      <!-- Insert Image picker: a grid of every image already in the vault, so
+           one can be dropped in by sight rather than by remembering a filename
+           like "Pasted image 3.png". Opened with the Insert Image shortcut or
+           the editor's right-click menu. -->
+      <div id="image-picker" class="hidden" role="dialog" aria-label="Insert image">
+        <div id="image-picker-panel">
+          <div id="image-picker-search">
+            <input
+              id="image-picker-filter"
+              type="text"
+              placeholder="Filter images…"
+              autocomplete="off"
+              spellcheck="false"
+            />
+          </div>
+          <div id="image-picker-grid"></div>
+          <div id="image-picker-empty" class="hidden"></div>
+        </div>
+      </div>
+
       <!-- Alt-click a [[link]] to read the note without leaving where you are.
            Deliberately a modifier-click rather than hover: a popover appearing
            from a passing hover can sit exactly where a Ctrl-click was aimed. -->

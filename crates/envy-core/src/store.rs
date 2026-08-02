@@ -671,6 +671,31 @@ impl NoteStore {
         Ok(name)
     }
 
+    /// Every image in `Attachments/`, newest first — for the Insert Image
+    /// picker, so a picture is chosen by sight rather than by an unmemorable
+    /// filename. Mirrors the Mac's `imageAttachments()`.
+    pub fn image_attachments(&self) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(self.attachments_dir()) else {
+            return Vec::new();
+        };
+        let mut images: Vec<(String, SystemTime)> = entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if !crate::note::is_image_attachment(&name) {
+                    return None;
+                }
+                let modified = e
+                    .metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH);
+                Some((name, modified))
+            })
+            .collect();
+        images.sort_by(|a, b| b.1.cmp(&a.1));
+        images.into_iter().map(|(name, _)| name).collect()
+    }
+
     /// Renames an attachment file and rewrites every `![[old…]]` reference to it
     /// across the vault, returning the final (de-duped) name — or `None` if the
     /// file is missing or the move fails. Each referring note keeps its modified
