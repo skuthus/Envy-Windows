@@ -13,11 +13,19 @@ use std::time::SystemTime;
 use fancy_regex::Regex;
 use rayon::prelude::*;
 
-use crate::filename::{available_path, sanitize_title, unique_filename};
+use crate::filename::{available_attachment_name, available_path, sanitize_title, unique_filename};
 use crate::note::Note;
 use crate::search::INBOX_FOLDER_NAME;
 
 pub const TEMPLATES_FOLDER_NAME: &str = "Templates";
+
+/// The vault's single image store: one visible `Attachments/` folder at the
+/// Index root, holding every pasted or dropped image. Deliberately not
+/// dot-hidden — cloud-sync clients routinely skip dot-folders, which would
+/// strand the images away from the notes that reference them. Because it's
+/// visible it has to be excluded from the note scan and the folder list by
+/// name. Mirrors the Mac's `NoteStore.attachmentsFolderName`.
+pub const ATTACHMENTS_FOLDER_NAME: &str = "Attachments";
 
 /// A folder's own `.trash` subfolder is where `delete` sends notes first,
 /// ahead of the real Recycle Bin — not one `Trash/` at the Index's top level,
@@ -143,7 +151,10 @@ impl NoteStore {
                     continue;
                 }
                 let name = path.file_name().unwrap_or_default().to_string_lossy();
-                if name == TEMPLATES_FOLDER_NAME || name == INBOX_FOLDER_NAME {
+                if name == TEMPLATES_FOLDER_NAME
+                    || name == INBOX_FOLDER_NAME
+                    || name == ATTACHMENTS_FOLDER_NAME
+                {
                     continue;
                 }
                 if let Ok(rel) = path.strip_prefix(root) {
@@ -257,7 +268,12 @@ impl NoteStore {
         // Neither end may be a reserved folder — those are Envy's own, not the
         // user's to rename into or out of. Checked on the first segment, since
         // that is the one that would collide with a service folder at the root.
-        let reserved = [TEMPLATES_FOLDER_NAME, INBOX_FOLDER_NAME, TRASH_FOLDER_NAME];
+        let reserved = [
+            TEMPLATES_FOLDER_NAME,
+            INBOX_FOLDER_NAME,
+            TRASH_FOLDER_NAME,
+            ATTACHMENTS_FOLDER_NAME,
+        ];
         let first_segment = |p: &str| p.split('/').next().unwrap_or("").to_string();
         let new_first = first_segment(&new_path);
         let old_first = first_segment(old_path);
@@ -624,6 +640,49 @@ impl NoteStore {
         self.refresh_trashed();
     }
 
+    // --- Attachments --------------------------------------------------------
+
+    /// The vault's single `Attachments/` folder. Not created here — the writers
+    /// make it on demand, so merely resolving a path never leaves an empty
+    /// folder behind.
+    pub fn attachments_dir(&self) -> PathBuf {
+        self.directory.join(ATTACHMENTS_FOLDER_NAME)
+    }
+
+    /// Resolves a bare attachment filename (already parsed out of `![[…]]`,
+    /// before any `|size`) to its path. No existence check — the renderer
+    /// decides what a missing file looks like.
+    pub fn attachment_path(&self, name: &str) -> PathBuf {
+        self.attachments_dir().join(name)
+    }
+
+    /// Writes raw image bytes as `base.ext`, de-duped, returning the stored
+    /// filename. Creates `Attachments/` on demand. This is the clipboard-paste
+    /// path, where `base` is always "Pasted image" (so `Pasted image.png`,
+    /// `Pasted image (2).png`, …), matching the Mac's `saveAttachment`.
+    pub fn save_attachment(&self, bytes: &[u8], base: &str, ext: &str) -> std::io::Result<String> {
+        let dir = self.attachments_dir();
+        fs::create_dir_all(&dir)?;
+        let name = available_attachment_name(&format!("{base}.{ext}"), &dir);
+        fs::write(dir.join(&name), bytes)?;
+        Ok(name)
+    }
+
+    /// Copies an external file into `Attachments/`, de-duped, returning the
+    /// stored filename. The original is left where it was — the drag-and-drop
+    /// path, matching the Mac's `copyAttachment` (a copy, not a move).
+    pub fn copy_attachment(&self, source: &Path) -> std::io::Result<String> {
+        let dir = self.attachments_dir();
+        fs::create_dir_all(&dir)?;
+        let original = source
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "attachment".to_string());
+        let name = available_attachment_name(&original, &dir);
+        fs::copy(source, dir.join(&name))?;
+        Ok(name)
+    }
+
     // --- Templates ----------------------------------------------------------
 
     pub fn templates(&self) -> Vec<NoteTemplate> {
@@ -867,11 +926,13 @@ fn set_modified(path: &Path, time: SystemTime) -> std::io::Result<()> {
 /// free by asking for `.contentModificationDateKey` during enumeration.
 fn note_paths(directory: &Path, include_subfolders: bool) -> Vec<(PathBuf, SystemTime)> {
     let templates = directory.join(TEMPLATES_FOLDER_NAME);
+    let attachments = directory.join(ATTACHMENTS_FOLDER_NAME);
     let mut out = Vec::new();
 
     fn walk(
         dir: &Path,
         templates: &Path,
+        attachments: &Path,
         recurse: bool,
         out: &mut Vec<(PathBuf, SystemTime)>,
     ) {
@@ -890,10 +951,10 @@ fn note_paths(directory: &Path, include_subfolders: bool) -> Vec<(PathBuf, Syste
                 Err(_) => path.is_dir(),
             };
             if is_dir {
-                if !recurse || is_hidden(&path) || path == templates {
+                if !recurse || is_hidden(&path) || path == templates || path == attachments {
                     continue;
                 }
-                walk(&path, templates, true, out);
+                walk(&path, templates, attachments, true, out);
             } else if is_markdown(&path) && !is_hidden(&path) {
                 let modified = entry
                     .metadata()
@@ -904,12 +965,12 @@ fn note_paths(directory: &Path, include_subfolders: bool) -> Vec<(PathBuf, Syste
         }
     }
 
-    walk(directory, &templates, include_subfolders, &mut out);
+    walk(directory, &templates, &attachments, include_subfolders, &mut out);
 
     if !include_subfolders {
         let inbox = directory.join(INBOX_FOLDER_NAME);
         if inbox.is_dir() {
-            walk(&inbox, &templates, false, &mut out);
+            walk(&inbox, &templates, &attachments, false, &mut out);
         }
     }
     out
@@ -1658,6 +1719,43 @@ mod tests {
             fs::read_to_string(dir.path().join("A.md")).unwrap(),
             "a different note"
         );
+    }
+
+    #[test]
+    fn save_attachment_writes_and_dedups() {
+        let (dir, store) = store_with(&[("A.md", "x")]);
+        let first = store.save_attachment(b"one", "Pasted image", "png").unwrap();
+        let second = store.save_attachment(b"two", "Pasted image", "png").unwrap();
+        assert_eq!(first, "Pasted image.png");
+        assert_eq!(second, "Pasted image (2).png");
+        assert!(dir.path().join("Attachments/Pasted image.png").exists());
+        assert_eq!(
+            fs::read(store.attachment_path(&second)).unwrap(),
+            b"two".to_vec()
+        );
+    }
+
+    #[test]
+    fn copy_attachment_keeps_the_original_and_preserves_the_name() {
+        let (dir, store) = store_with(&[("A.md", "x")]);
+        let source = dir.path().join("photo.jpg");
+        fs::write(&source, b"jpegbytes").unwrap();
+        let stored = store.copy_attachment(&source).unwrap();
+        assert_eq!(stored, "photo.jpg");
+        assert!(source.exists()); // a copy, not a move
+        assert!(dir.path().join("Attachments/photo.jpg").exists());
+    }
+
+    #[test]
+    fn attachments_folder_is_not_a_note_or_a_listed_folder() {
+        let (_dir, mut store) =
+            nested_store_with(&[("Real.md", "x"), ("Attachments/pic.png", "notanote")]);
+        // The image never becomes a note...
+        assert_eq!(titles(&store), vec!["Real"]);
+        store.reload();
+        assert_eq!(titles(&store), vec!["Real"]);
+        // ...and Attachments/ never shows up as a user folder.
+        assert!(!store.subfolders().iter().any(|f| f == "Attachments"));
     }
 
     #[test]

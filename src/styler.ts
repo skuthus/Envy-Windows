@@ -18,6 +18,11 @@ export interface EmbedHost {
   save(id: string, content: string): Promise<void>
   /// The note the host editor is currently showing, for the self-embed guard.
   currentNoteId(): string | null
+  /// The bytes of an attachment by filename, for rendering `![[image.png]]`
+  /// inline. Null when the file is missing (the widget shows a placeholder).
+  readAttachment(name: string): Promise<ArrayBuffer | null>
+  /// Opens an attachment in the system default app — clicking the image.
+  openAttachment(name: string): void
 }
 
 export const embedHost = Facet.define<EmbedHost, EmbedHost | null>({
@@ -50,7 +55,7 @@ const IMAGE_EXTENSIONS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'tiff', 'tif', 'bmp',
 ])
 
-function isImageTarget(target: string): boolean {
+export function isImageTarget(target: string): boolean {
   const dot = target.lastIndexOf('.')
   return dot !== -1 && IMAGE_EXTENSIONS.has(target.slice(dot + 1).toLowerCase())
 }
@@ -254,6 +259,85 @@ function embedMessage(text: string): HTMLElement {
   p.className = 'envy-embed-message'
   p.textContent = text
   return p
+}
+
+/// An `![[image.png]]` rendered as the picture itself, in a block below the
+/// marker line — the twin of the note EmbedWidget, but for attachments. The
+/// bytes come from the host (a Rust read), wrapped in an object URL so a large
+/// image isn't re-encoded on every rebuild; the URL is revoked on destroy.
+class ImageEmbedWidget extends WidgetType {
+  private objectUrl: string | null = null
+  private alive = true
+
+  constructor(
+    readonly name: string,
+    readonly host: EmbedHost | null,
+  ) {
+    super()
+  }
+
+  /// Same name → same image, so CodeMirror reuses the DOM (and the decoded
+  /// picture) across edits elsewhere in the note rather than reloading it.
+  eq(other: ImageEmbedWidget) {
+    return other.name === this.name
+  }
+
+  /// The click-to-open handler is the widget's own; without this the outer
+  /// editor would treat a click on the image as a click on opaque space and
+  /// move its caret instead.
+  ignoreEvent() {
+    return true
+  }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'envy-image-embed'
+    const img = document.createElement('img')
+    img.alt = this.name
+    img.draggable = false
+    // Clicking the picture opens it in the default app, the same as clicking the
+    // filename text — the Mac hands the image to Preview either way.
+    img.addEventListener('click', () => this.host?.openAttachment(this.name))
+    wrap.append(img)
+    void this.load(img, wrap)
+    return wrap
+  }
+
+  private async load(img: HTMLImageElement, wrap: HTMLElement) {
+    // No host means a surface that doesn't serve attachments yet (the pop-out
+    // and pinned windows). Render nothing rather than a false "missing" — the
+    // file is fine, this window just can't fetch it.
+    if (!this.host) return
+    let bytes: ArrayBuffer | null = null
+    try {
+      bytes = await this.host.readAttachment(this.name)
+    } catch (e) {
+      console.error(`could not read attachment "${this.name}"`, e)
+    }
+    if (!this.alive) return
+    if (!bytes) {
+      this.showMissing(wrap)
+      return
+    }
+    this.objectUrl = URL.createObjectURL(new Blob([bytes]))
+    img.src = this.objectUrl
+  }
+
+  /// A missing file degrades to a placeholder rather than a broken-image icon,
+  /// matching the Mac's dashed "Missing image" block. The reference text stays,
+  /// so the note still records what should be there.
+  private showMissing(wrap: HTMLElement) {
+    wrap.classList.add('envy-image-embed-missing')
+    wrap.textContent = `⚠ Missing image: ${this.name}`
+  }
+
+  destroy() {
+    this.alive = false
+    if (this.objectUrl) {
+      URL.revokeObjectURL(this.objectUrl)
+      this.objectUrl = null
+    }
+  }
 }
 
 class EmbedWidget extends WidgetType {
@@ -1040,13 +1124,13 @@ function buildEmbedDecorations(state: EditorState): DecorationSet {
     // mentioned mid-sentence doesn't cut the sentence in half. The `![[…]]`
     // stays ordinary text, styled as a link.
     const line = state.doc.lineAt(m.index!)
-    ranges.push(
-      Decoration.widget({
-        widget: new EmbedWidget(title, host, hostNoteId),
-        block: true,
-        side: 1,
-      }).range(line.to),
-    )
+    // An image extension makes it an attachment, rendered as a picture; anything
+    // else is a note transclusion. The single `isImageTarget` split keeps this
+    // in step with envy-core's is_image_attachment.
+    const widget = isImageTarget(title)
+      ? new ImageEmbedWidget(title, host)
+      : new EmbedWidget(title, host, hostNoteId)
+    ranges.push(Decoration.widget({ widget, block: true, side: 1 }).range(line.to))
   }
   return Decoration.set(ranges, true)
 }

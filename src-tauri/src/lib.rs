@@ -416,6 +416,65 @@ fn open_external_url(url: String, app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Saves pasted image bytes into `Attachments/`, returning the stored filename
+/// for the editor to drop into an `![[…]]`. `base`/`ext` are fixed by the paste
+/// handler ("Pasted image"/"png"). The internal-write mark keeps our own write
+/// from bouncing back through the file watcher as an outside change.
+#[tauri::command]
+fn save_attachment(
+    bytes: Vec<u8>,
+    base: String,
+    ext: String,
+    state: State<AppState>,
+) -> Result<String, String> {
+    state.mark_internal_write();
+    state
+        .store
+        .lock()
+        .unwrap()
+        .save_attachment(&bytes, &base, &ext)
+        .map_err(|e| e.to_string())
+}
+
+/// Copies a dropped image file into `Attachments/`, returning the stored
+/// filename. The original file is left where it was.
+#[tauri::command]
+fn copy_attachment(path: String, state: State<AppState>) -> Result<String, String> {
+    state.mark_internal_write();
+    state
+        .store
+        .lock()
+        .unwrap()
+        .copy_attachment(std::path::Path::new(&path))
+        .map_err(|e| e.to_string())
+}
+
+/// The raw bytes of an attachment, for rendering it inline. Returned as an IPC
+/// response (an ArrayBuffer on the JS side), not a JSON number array, so a
+/// multi-megabyte image doesn't pay serialization overhead on every restyle.
+#[tauri::command]
+fn read_attachment(name: String, state: State<AppState>) -> Result<tauri::ipc::Response, String> {
+    let path = state.store.lock().unwrap().attachment_path(&name);
+    std::fs::read(&path)
+        .map(tauri::ipc::Response::new)
+        .map_err(|e| e.to_string())
+}
+
+/// Opens an attachment in the system default app — the click-the-filename
+/// action, matching the Mac handing the image to Preview.
+#[tauri::command]
+fn open_attachment(
+    name: String,
+    app: tauri::AppHandle,
+    state: State<AppState>,
+) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let path = state.store.lock().unwrap().attachment_path(&name);
+    app.opener()
+        .open_path(path.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
 /// Every folder under the Index a note could be filed into, for the "Move to"
 /// menu. Walked fresh each time the menu opens rather than cached — folders
 /// change from outside Envy as easily as from within it.
@@ -1873,6 +1932,10 @@ pub fn run() {
             restore_from_trash,
             delete_from_trash,
             empty_trash,
+            save_attachment,
+            copy_attachment,
+            read_attachment,
+            open_attachment,
             check_for_updates,
             reveal_folder,
             set_index_directory,

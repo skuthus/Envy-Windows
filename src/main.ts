@@ -6,10 +6,12 @@ import { listen } from '@tauri-apps/api/event'
 import { open as openFolderPicker } from '@tauri-apps/plugin-dialog'
 import { getVersion } from '@tauri-apps/api/app'
 import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import {
   embedHost,
   envyStyler,
   existingTitles,
+  isImageTarget,
   isGhostLinkForTest,
   plainTextField,
   refreshEmbeds,
@@ -178,6 +180,11 @@ const view = new EditorView({
           await runSearch()
         },
         currentNoteId: () => openNoteId,
+        // The command returns raw bytes as an IPC Response, which arrives here as
+        // an ArrayBuffer; the widget wraps it in an object URL.
+        readAttachment: (name) =>
+          invoke<ArrayBuffer>('read_attachment', { name }).catch(() => null),
+        openAttachment: (name) => void invoke('open_attachment', { name }),
       }),
       envyStyler,
       EditorView.domEventHandlers({
@@ -254,7 +261,29 @@ const view = new EditorView({
             if (range && caret >= range.from && caret <= range.to) return false
           }
           event.preventDefault()
+          // An `![[image.png]]` target is an attachment, not a note — open the
+          // file rather than resolving (and ghost-creating) a note by that name.
+          if (isImageTarget(target)) {
+            void invoke('open_attachment', { name: target })
+            return true
+          }
           void followLink(target)
+          return true
+        },
+        // Pasting an image writes it to Attachments/ and drops in an `![[…]]`.
+        // Only claimed when the clipboard carries an image and no text — a
+        // copied text run pastes as text, matching the Mac's no-string guard.
+        paste: (event, v) => {
+          if (!openNoteId && !openTemplatePath) return false
+          const dt = event.clipboardData
+          if (!dt || dt.getData('text/plain')) return false
+          const item = [...dt.items].find(
+            (it) => it.kind === 'file' && it.type.startsWith('image/'),
+          )
+          const file = item?.getAsFile()
+          if (!file) return false
+          event.preventDefault()
+          void importPastedImage(file, v)
           return true
         },
       }),
@@ -543,6 +572,70 @@ async function followLink(target: string) {
   renderList()
   view.focus()
 }
+
+// --- Image attachments -------------------------------------------------------
+// Pasting or dropping an image writes the file into the vault's Attachments/
+// folder and inserts an `![[filename]]` embed the styler renders inline. Mirrors
+// the Mac's paste/drop handlers in MarkdownTextView.
+
+/// Inserts `![[name]]` on its own line at the selection, with a leading break if
+/// we're mid-line and a trailing blank line — the same shape the Mac's
+/// `insertImageReference` uses (the blank line is where the picture sits).
+function insertImageReference(name: string, v: EditorView) {
+  const sel = v.state.selection.main
+  const atLineStart = sel.from === 0 || v.state.doc.sliceString(sel.from - 1, sel.from) === '\n'
+  const insertion = `${atLineStart ? '' : '\n'}![[${name}]]\n\n`
+  v.dispatch({
+    changes: { from: sel.from, to: sel.to, insert: insertion },
+    selection: { anchor: sel.from + insertion.length },
+  })
+  v.focus()
+}
+
+/// Saves a pasted image blob to Attachments/ and drops in its reference. The
+/// bytes go over as a plain array — a paste is one-off and images are modest, so
+/// the simplicity is worth more than shaving the IPC.
+async function importPastedImage(file: File, v: EditorView) {
+  try {
+    const bytes = Array.from(new Uint8Array(await file.arrayBuffer()))
+    // WebView2 hands clipboard images over as PNG; keep the real subtype for the
+    // rare non-PNG so the file extension matches its bytes.
+    const ext = file.type.startsWith('image/') ? file.type.slice('image/'.length) : 'png'
+    const name = await invoke<string>('save_attachment', {
+      bytes,
+      base: 'Pasted image',
+      ext: ext || 'png',
+    })
+    insertImageReference(name, v)
+  } catch (e) {
+    console.error('could not paste image', e)
+  }
+}
+
+// Native file drops. Tauri intercepts the webview's own drop events and reports
+// them here with real file paths, so a dropped image is copied into
+// Attachments/ (leaving the original in place) and referenced at the drop point.
+void getCurrentWebview().onDragDropEvent(async (event) => {
+  if (event.payload.type !== 'drop') return
+  if (!openNoteId && !openTemplatePath) return
+  const imagePath = event.payload.paths.find((p) => isImageTarget(p))
+  if (!imagePath) return
+  // The reported position is in physical pixels; posAtCoords wants CSS pixels.
+  const dpr = window.devicePixelRatio || 1
+  const pos = view.posAtCoords({
+    x: event.payload.position.x / dpr,
+    y: event.payload.position.y / dpr,
+  })
+  try {
+    const name = await invoke<string>('copy_attachment', { path: imagePath })
+    // Land the caret where it was dropped, falling back to wherever it already
+    // is if the drop wasn't over the text.
+    if (pos != null) view.dispatch({ selection: { anchor: pos } })
+    insertImageReference(name, view)
+  } catch (e) {
+    console.error('could not import dropped image', e)
+  }
+})
 
 // --- In-note navigation ------------------------------------------------------
 // Clicking a footnote reference jumps to its definition, and a `[text](#slug)`

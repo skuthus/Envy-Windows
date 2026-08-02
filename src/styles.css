@@ -1654,6 +1654,29 @@ body.popout-window {
   padding: 2px 0;
 }
 
+/* An inline image attachment. The picture shows at its natural size but never
+   wider than the text column; clicking it opens the file in the default app. */
+.envy-image-embed {
+  margin: 2px 0 6px;
+}
+.envy-image-embed img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  cursor: pointer;
+}
+/* A reference whose file is gone renders as a dashed placeholder rather than a
+   broken-image glyph, matching the Mac. */
+.envy-image-embed-missing {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--envy-blockquote);
+  padding: 8px 10px;
+  border: 1px dashed color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  border-radius: 6px;
+}
+
 /* --- Search matches -------------------------------------------------------
    Layered over whatever styling the span already has — a match can land on
    bold text, a link, a tag or plain prose. The forced ink is why: without it a

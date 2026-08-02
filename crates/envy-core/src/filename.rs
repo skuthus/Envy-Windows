@@ -78,6 +78,37 @@ pub fn sanitize_title(title: &str) -> String {
     s
 }
 
+/// A free filename in `directory` for an attachment, **preserving the original
+/// extension** and disambiguating the base with " (2)", " (3)"… — the shape the
+/// Mac's `availableAttachmentName` uses. The base is sanitized the same way a
+/// title is, but falls back to "attachment" rather than "Untitled"; the
+/// extension keeps it clear of the reserved-device-name case a bare stem hits.
+pub fn available_attachment_name(filename: &str, directory: &Path) -> String {
+    let (raw_base, ext) = match filename.rsplit_once('.') {
+        Some((b, e)) if !b.is_empty() && !e.is_empty() => (b, Some(e)),
+        _ => (filename, None),
+    };
+    let mut base: String = raw_base
+        .chars()
+        .map(|c| if ILLEGAL.contains(&c) || c.is_control() { '-' } else { c })
+        .collect();
+    base = base.trim().trim_end_matches(['.', ' ']).trim().to_string();
+    if base.is_empty() {
+        base = "attachment".to_string();
+    }
+    let with = |b: &str| match ext {
+        Some(e) => format!("{b}.{e}"),
+        None => b.to_string(),
+    };
+    let mut candidate = with(&base);
+    let mut counter = 2;
+    while directory.join(&candidate).exists() {
+        candidate = with(&format!("{base} ({counter})"));
+        counter += 1;
+    }
+    candidate
+}
+
 /// A free filename in `directory` for `title`, disambiguating with " 2",
 /// " 3"… — the shape `NoteStore.uniqueFilename` uses.
 pub fn unique_filename(title: &str, directory: &Path) -> String {
