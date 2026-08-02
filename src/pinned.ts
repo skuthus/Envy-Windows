@@ -15,7 +15,8 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import { envyStyler } from './styler'
+import { envyStyler, embedHost, isImageTarget } from './styler'
+import { makeEmbedHost } from './embed-host'
 import { listEditing } from './lists'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 
@@ -82,16 +83,28 @@ const view = new EditorView({
       listEditing,
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
+      // Resolves `![[note]]` transclusions and `![[image.png]]` attachments, so
+      // a pinned note renders images (and embeds) like the main window.
+      embedHost.of(makeEmbedHost(() => noteId)),
       envyStyler,
       EditorView.domEventHandlers({
         mousedown: (event, v) => {
           if (event.button !== 0) return false
+          // Clicks inside a rendered embed belong to the widget, not a follow.
+          if ((event.target as HTMLElement | null)?.closest('.envy-image-embed, .envy-embed')) {
+            return false
+          }
           const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
           if (pos === null) return false
           if (requireModifier && !event.ctrlKey) return false
           const target = wikiLinkTargetAt(v, pos)
           if (!target) return false
           event.preventDefault()
+          // An image reference opens the file; a note reference opens in main.
+          if (isImageTarget(target)) {
+            void invoke('open_attachment', { name: target })
+            return true
+          }
           void followInMain(target)
           return true
         },
