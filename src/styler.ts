@@ -479,6 +479,9 @@ const styles = {
   /// A footnote *reference* `[^1]` — the label rendered as a small raised
   /// superscript in the link colour, with the `[^`/`]` hidden, matching the Mac.
   footnoteRef: mark('envy-footnote-ref'),
+  /// A footnote *definition*'s number, superscripted like the reference but in
+  /// the dim footnote colour (it's the passive end, not a clickable link).
+  footnoteDefNum: mark('envy-footnote-defnum'),
   /// A list marker (`-`/`+`/`*` or `1.`) dimmed so the content reads first.
   listMarker: mark('envy-list-marker'),
   completedTask: mark('envy-completed-task'),
@@ -771,8 +774,26 @@ function buildDecorations(view: EditorView): DecorationSet {
 
     for (const m of text.matchAll(P.footnoteDefinition)) {
       const s = base + m.index!
-      if (insideCode(s, s + m[0].length)) continue
-      marks.push({ from: s, to: s + m[0].length, deco: styles.footnote })
+      const markerEnd = s + m[0].length
+      if (insideCode(s, markerEnd)) continue
+      // The definition text (everything after the "[^n]:" marker) reads as a
+      // small, dim footnote. The marker collapses to just its number, shown as
+      // a superscript so you can tell which reference a definition answers to —
+      // the "[^" and "]:" hide, the number stays. (The Mac hides the number
+      // too; keeping it is the clearer call.) Revealed raw when the caret's on.
+      const lineEnd = doc.lineAt(s).to
+      if (lineEnd > markerEnd) {
+        marks.push({ from: markerEnd, to: lineEnd, deco: styles.footnote })
+      }
+      if (!selectionTouches(view, s, markerEnd)) {
+        const numFrom = s + 2 // after "[^"
+        const numTo = numFrom + m[1].length
+        marks.push({ from: s, to: numFrom, deco: hidden })
+        marks.push({ from: numFrom, to: numTo, deco: styles.footnoteDefNum })
+        marks.push({ from: numTo, to: markerEnd, deco: hidden })
+      } else {
+        marks.push({ from: s, to: markerEnd, deco: styles.marker })
+      }
     }
 
     // --- Inline constructs ------------------------------------------------
@@ -806,6 +827,15 @@ function buildDecorations(view: EditorView): DecorationSet {
         if (!selectionTouches(view, s, e)) {
           marks.push({ from: s, to: s + markerLen, deco: hidden })
           marks.push({ from: e - (markerLen === 3 && re === P.embed ? 2 : markerLen), to: e, deco: hidden })
+          // `[[Note|shown]]` shows only "shown": collapse the "Note|" the same
+          // way a `[text](url)` hides its target, so an aliased link reads as
+          // its alias. A `#heading` (no pipe) is left as written, like the Mac.
+          if (re === P.wikiLink) {
+            const pipe = m[1].indexOf('|')
+            if (pipe !== -1) {
+              marks.push({ from: s + markerLen, to: s + markerLen + pipe + 1, deco: hidden })
+            }
+          }
         } else {
           marks.push({ from: s, to: s + markerLen, deco: styles.marker })
           marks.push({ from: e - (markerLen === 3 && re === P.embed ? 2 : markerLen), to: e, deco: styles.marker })

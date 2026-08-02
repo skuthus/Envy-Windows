@@ -1411,15 +1411,10 @@ function buildRow(note: NoteDto, i: number): HTMLElement {
         pin.title = 'Pinned to the top of the list'
         title.prepend(pin)
       }
-      if (note.aiProvenance !== 'none') {
-        const badge = document.createElement('span')
-        badge.className = 'ai-badge'
-        badge.textContent = '⎈'
-        // "Marked as", never asserted — it's a self-attested claim Envy can't
-        // verify, same wording rule as the Mac.
-        badge.title = `Marked as ${note.aiProvenance} by an AI assistant`
-        title.append(badge)
-      }
+      // The ⎈ AI-provenance mark is deliberately not shown — the Mac hides its
+      // own "until the feature is designed" (NoteRow.swift). The core still
+      // parses `aiProvenance`, so the badge can be restored later without
+      // touching the scanner.
 
       // Title and preview sit together on one line, the preview following the
       // title rather than wrapping under it — the Mac's row is a single HStack.

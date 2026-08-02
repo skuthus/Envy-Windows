@@ -1688,4 +1688,12 @@ body.popover {
   color: var(--envy-link);
   cursor: pointer;
 }
+/* A footnote definition's number: the same small raised shape as the
+   reference, in the dim footnote colour so it reads as the passive end. */
+.envy-footnote-defnum {
+  font-size: 0.72em;
+  vertical-align: super;
+  line-height: 0;
+  color: var(--envy-footnote);
+}
 .envy-hr { color: var(--envy-marker); }
