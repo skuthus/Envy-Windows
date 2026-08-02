@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use envy_core::{IndexWatcher, NoteStore, SearchContext};
 use serde::Serialize;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{Emitter, Manager, State, WebviewWindow};
 use tauri_plugin_autostart::ManagerExt as AutostartManagerExt;
@@ -175,6 +175,44 @@ fn save_index_directory(app: &tauri::AppHandle, dir: &Path) {
         let _ = std::fs::create_dir_all(parent);
     }
     let _ = std::fs::write(&file, dir.to_string_lossy().as_bytes());
+}
+
+// --- Keep Envy on Top --------------------------------------------------------
+// Whether the main window floats above other apps' windows. The Windows
+// equivalent of the Mac's keepMainWindowOnTop UserDefault: toggled from the
+// tray menu, persisted in the app config dir, and re-applied on launch. Only
+// the main window — the pinned-note popover already floats on its own.
+
+fn keep_on_top_file(app: &tauri::AppHandle) -> Option<PathBuf> {
+    app.path().app_config_dir().ok().map(|d| d.join("keep-on-top"))
+}
+
+fn persisted_keep_on_top(app: &tauri::AppHandle) -> bool {
+    keep_on_top_file(app)
+        .and_then(|f| std::fs::read_to_string(f).ok())
+        .map(|s| s.trim() == "true")
+        .unwrap_or(false)
+}
+
+fn save_keep_on_top(app: &tauri::AppHandle, on: bool) {
+    let Some(file) = keep_on_top_file(app) else {
+        return;
+    };
+    if let Some(parent) = file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&file, if on { "true" } else { "false" });
+}
+
+/// Raises or lowers the main window's always-on-top flag, and tells the
+/// frontend the new state so it can suppress hide-on-focus-loss while on — a
+/// window pinned on top that vanishes the moment you click away would fight
+/// itself. Mirrors the Mac, where keepOnTop suppresses the same auto-hide.
+fn apply_keep_on_top(app: &tauri::AppHandle, on: bool) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.set_always_on_top(on);
+        let _ = w.emit("keep-on-top-changed", on);
+    }
 }
 
 #[tauri::command]
@@ -746,6 +784,32 @@ fn inbox_count(state: State<AppState>) -> usize {
         .count()
 }
 
+/// Whole-vault totals for the footer: every loaded note (fleeting ones
+/// included; Templates and Trash never load) and the subfolder count. Both are
+/// cheap reads. Mirrors the Mac's vaultCountsLabel inputs — the folder count is
+/// only *shown* when subfolder scanning is on, which the frontend decides.
+#[derive(Serialize)]
+struct VaultCounts {
+    notes: usize,
+    folders: usize,
+}
+
+/// The remembered on-top state, for the frontend to suppress hide-on-focus-loss
+/// while it's on.
+#[tauri::command]
+fn keep_on_top(app: tauri::AppHandle) -> bool {
+    persisted_keep_on_top(&app)
+}
+
+#[tauri::command]
+fn vault_counts(state: State<AppState>) -> VaultCounts {
+    let store = state.store.lock().unwrap();
+    VaultCounts {
+        notes: store.notes().len(),
+        folders: store.subfolders().len(),
+    }
+}
+
 /// Files a fleeting note into the Index proper — a plain move out of `Inbox/`.
 /// The note's text is untouched, so nothing about having been fleeting
 /// survives in the file.
@@ -1107,6 +1171,16 @@ fn build_tray_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, Box<dyn s
         .unwrap_or(false);
     let unpin = MenuItem::with_id(app, "unpin", "Unpin Note", is_pinned, None::<&str>)?;
 
+    // Checkmark reflects the current state, same as the Mac's status-menu item.
+    let keep_on_top = CheckMenuItem::with_id(
+        app,
+        "keep_on_top",
+        "Keep Envy on Top",
+        true,
+        persisted_keep_on_top(app),
+        None::<&str>,
+    )?;
+
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     // The Mac carries "Check for Updates…" as a menu command beside the
     // automatic background check, for anyone who would rather ask than wait.
@@ -1127,6 +1201,7 @@ fn build_tray_menu(app: &tauri::AppHandle) -> Result<Menu<tauri::Wry>, Box<dyn s
             &template_submenu,
             &unpin,
             &PredefinedMenuItem::separator(app)?,
+            &keep_on_top,
             &settings,
             &check_updates,
             &quit,
@@ -1361,6 +1436,12 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                     }
                     let _ = app.emit("pinned-note-changed", ());
     refresh_tray_menu(app);
+                }
+                "keep_on_top" => {
+                    let on = !persisted_keep_on_top(app);
+                    save_keep_on_top(app, on);
+                    apply_keep_on_top(app, on);
+                    refresh_tray_menu(app);
                 }
                 "settings" => {
                     if let Some(w) = app.get_webview_window("main") {
@@ -1642,6 +1723,8 @@ pub fn run() {
 
             setup_global_hotkey(app.handle())?;
             setup_tray(app.handle())?;
+            // Re-assert the remembered on-top state now the window exists.
+            apply_keep_on_top(app.handle(), persisted_keep_on_top(app.handle()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1681,6 +1764,8 @@ pub fn run() {
             save_template,
             create_inbox_note,
             inbox_count,
+            vault_counts,
+            keep_on_top,
             all_tags,
             all_titles,
             submit_from_inbox,

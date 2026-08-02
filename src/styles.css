@@ -798,6 +798,14 @@ body.popover {
 }
 #footer-clock { font-variant-numeric: tabular-nums; }
 #footer-clock.hidden, #loading-indicator.hidden { display: none; }
+#vault-stats { font-variant-numeric: tabular-nums; }
+#vault-stats.hidden { display: none; }
+/* A thin rule between the open note's counts and the vault totals, only when
+   both are showing — mirrors the Mac's 1px separator. */
+#vault-stats.with-divider {
+  border-left: 1px solid color-mix(in srgb, var(--envy-marker) 45%, transparent);
+  padding-left: 12px;
+}
 #loading-indicator { opacity: 0.8; }
 
 #template-actions { display: flex; gap: 6px; flex: none; }
@@ -1669,4 +1677,13 @@ body.popover {
 
 /* --- Footnotes / rules --------------------------------------------------- */
 .envy-footnote { color: var(--envy-footnote); font-size: 0.9em; }
+/* A footnote reference: a small raised number in the link colour, no brackets,
+   click to jump to its definition. Matches the Mac's superscript label. */
+.envy-footnote-ref {
+  font-size: 0.72em;
+  vertical-align: super;
+  line-height: 0;
+  color: var(--envy-link);
+  cursor: pointer;
+}
 .envy-hr { color: var(--envy-marker); }

@@ -204,6 +204,38 @@ const view = new EditorView({
             return true
           }
 
+          // In-note jumps happen on a plain click, no modifier — there's
+          // nothing else a footnote reference or a heading anchor could mean.
+          if (!event.altKey) {
+            const footnote = footnoteRefAt(v, pos)
+            if (footnote) {
+              const range = footnoteDefinitionRange(v.state.doc.toString(), footnote)
+              if (range) {
+                event.preventDefault()
+                jumpToRange(range)
+                return true
+              }
+            }
+            const mdLink = markdownLinkAt(v, pos)
+            if (mdLink?.url.startsWith('#')) {
+              const range = headingRangeForSlug(v.state.doc.toString(), mdLink.url.slice(1))
+              if (range) {
+                event.preventDefault()
+                jumpToRange(range)
+                return true
+              }
+            }
+            // An outbound `[text](http…)` link opens externally, but honours the
+            // modifier gate the same as a wiki-link so a plain click can still
+            // land the caret to edit the URL.
+            if (mdLink && /^https?:\/\//i.test(mdLink.url)) {
+              if (settings.requireModifierForLinkClick && !event.ctrlKey) return false
+              event.preventDefault()
+              void invoke('open_external_url', { url: mdLink.url })
+              return true
+            }
+          }
+
           if (settings.requireModifierForLinkClick && !event.ctrlKey) return false
           const target = wikiLinkTargetAt(v, pos)
           if (!target) return false
@@ -302,12 +334,54 @@ function countWords(text: string): number {
 function renderStats() {
   if (!openNoteId && !openTemplatePath) {
     statsEl.textContent = ''
+    renderVaultLabel()
     return
   }
   const text = view.state.doc.toString()
   const words = countWords(text)
   const chars = countCharacters(text)
   statsEl.textContent = `${words.toLocaleString()} word${words === 1 ? '' : 's'}, ${chars.toLocaleString()} character${chars === 1 ? '' : 's'}`
+  renderVaultLabel()
+}
+
+// Whole-vault totals, cached between the backend reads (which only change when
+// notes or folders are added or removed) so the footer label can be repainted
+// cheaply as the open note's own counts come and go beside it.
+const vaultStatsEl = document.getElementById('vault-stats')!
+let vaultCounts = { notes: 0, folders: 0 }
+
+/// Paints the vault-totals label from the cached counts. The folder count is
+/// shown only with subfolder scanning on — without it folders don't factor into
+/// Envy, so a count would just be noise (the Mac's rule). The `·` divider rule
+/// appears only when the open note's own counts sit beside it.
+function renderVaultLabel() {
+  if (!settings.showFooterVaultCounts) {
+    vaultStatsEl.classList.add('hidden')
+    return
+  }
+  const { notes, folders } = vaultCounts
+  let label = `${notes.toLocaleString()} note${notes === 1 ? '' : 's'}`
+  if (settings.includeSubfolders) {
+    label += ` · ${folders.toLocaleString()} folder${folders === 1 ? '' : 's'}`
+  }
+  vaultStatsEl.textContent = label
+  vaultStatsEl.classList.remove('hidden')
+  vaultStatsEl.classList.toggle('with-divider', statsEl.textContent !== '')
+}
+
+/// Re-reads the vault totals from the store, then repaints. Called on each
+/// search, since that's when a note or folder could have appeared or gone.
+async function refreshVaultCounts() {
+  if (!settings.showFooterVaultCounts) {
+    renderVaultLabel()
+    return
+  }
+  try {
+    vaultCounts = await invoke<{ notes: number; folders: number }>('vault_counts')
+  } catch (err) {
+    console.error('could not read vault counts', err)
+  }
+  renderVaultLabel()
 }
 
 function renderInterlinks() {
@@ -464,6 +538,87 @@ async function followLink(target: string) {
   if (highlighted < 0) highlighted = 0
   renderList()
   view.focus()
+}
+
+// --- In-note navigation ------------------------------------------------------
+// Clicking a footnote reference jumps to its definition, and a `[text](#slug)`
+// anchor jumps to that heading — both within the open note, both on a plain
+// click, matching the Mac's envy-footnote / envy-heading schemes. A `[text](url)`
+// with an http(s) URL opens externally, honouring the modifier gate like any
+// other outbound link.
+
+/// The `[text](url)` markdown link at a position, or null. Mirrors the styler's
+/// `link` pattern; url is the part in parentheses.
+function markdownLinkAt(v: EditorView, pos: number): { url: string; from: number; to: number } | null {
+  const line = v.state.doc.lineAt(pos)
+  const re = /(?<!!)\[([^\[\]]+)\]\(([^()\s]+)\)/g
+  for (const m of line.text.matchAll(re)) {
+    const from = line.from + m.index!
+    const to = from + m[0].length
+    if (pos >= from && pos <= to) return { url: m[2], from, to }
+  }
+  return null
+}
+
+/// The footnote label at a position when it's a *reference* `[^label]`, or null.
+/// A definition marker `[^label]:` (colon straight after) is not a reference and
+/// isn't clickable — matching the Mac, where only references carry the link.
+function footnoteRefAt(v: EditorView, pos: number): string | null {
+  const line = v.state.doc.lineAt(pos)
+  const re = /\[\^([^\]]+)\]/g
+  for (const m of line.text.matchAll(re)) {
+    const from = line.from + m.index!
+    const to = from + m[0].length
+    if (pos >= from && pos <= to) {
+      return v.state.doc.sliceString(to, to + 1) === ':' ? null : m[1]
+    }
+  }
+  return null
+}
+
+/// A heading's slug, GitHub-style: lowercased, everything but letters, digits,
+/// spaces and hyphens dropped, then runs of spaces collapsed to single dashes.
+/// Mirrors MarkdownStyler.headingSlug so `[text](#slug)` matches its heading.
+function headingSlug(text: string): string {
+  const kept = [...text.toLowerCase()]
+    .filter((c) => /[\p{L}\p{N}]/u.test(c) || c === ' ' || c === '-')
+    .join('')
+  return kept.split(' ').filter((s) => s.length > 0).join('-')
+}
+
+/// The `[^label]:` definition marker range for a footnote label, or null.
+function footnoteDefinitionRange(doc: string, label: string): { from: number; to: number } | null {
+  const re = /^\[\^([^\]]+)\]:[ \t]*/gm
+  for (const m of doc.matchAll(re)) {
+    if (m[1] === label) return { from: m.index!, to: m.index! + m[0].length }
+  }
+  return null
+}
+
+/// The range of the heading text whose slug matches, or null. Duplicate slugs
+/// get `-1`, `-2`, … in document order, GitHub-style, as the Mac does.
+function headingRangeForSlug(doc: string, slug: string): { from: number; to: number } | null {
+  const re = /^(#{1,6})[ \t]+(.*)$/gm
+  const seen = new Map<string, number>()
+  for (const m of doc.matchAll(re)) {
+    const base = headingSlug(m[2])
+    const count = seen.get(base) ?? 0
+    seen.set(base, count + 1)
+    const resolved = count === 0 ? base : `${base}-${count}`
+    if (resolved === slug) {
+      const from = m.index! + (m[0].length - m[2].length)
+      return { from, to: from + m[2].length }
+    }
+  }
+  return null
+}
+
+/// Scrolls a range into view and flashes it — the Mac's scrollRangeToVisible +
+/// showFindIndicator. The caret is left untouched, so a jump never disturbs
+/// where you were typing.
+function jumpToRange(range: { from: number; to: number }) {
+  view.dispatch({ effects: EditorView.scrollIntoView(range.from, { y: 'center' }) })
+  flashChangedRange(range)
 }
 
 // --- Layout -----------------------------------------------------------------
@@ -840,6 +995,8 @@ const settings = {
   newNotesStartInInbox: boolSetting('newNotesStartInInbox', false),
   showInboxInMainList: boolSetting('showInboxInMainList', true),
   showTagsInTitleBar: boolSetting('showTagsInTitleBar', false),
+  // Whole-vault note/folder totals in the footer — on by default, like the Mac.
+  showFooterVaultCounts: boolSetting('showFooterVaultCounts', true),
   // The open note's folder as a chip beside its tags — on by default, like the
   // Mac. Only ever shows for a note that actually sits in a subfolder.
   showFolderInTitleBar: boolSetting('showFolderInTitleBar', true),
@@ -1770,6 +1927,7 @@ async function runSearch() {
   templateResults = []
   trashPreviewEl.classList.add('hidden')
   void refreshCompletionSources()
+  void refreshVaultCounts()
   results = await invoke<NoteDto[]>('search', { query: searchInput.value })
   // Fleeting notes can be kept out of the way until you go looking for them.
   // Never hidden when the query is already about the inbox, though — asking
@@ -3484,6 +3642,7 @@ function openSettings() {
   checkbox('setting-focus-editor').checked = settings.moveFocusToEditorOnEnter
   checkbox('setting-inbox-new').checked = settings.newNotesStartInInbox
   checkbox('setting-inbox-in-list').checked = settings.showInboxInMainList
+  checkbox('setting-vault-counts').checked = settings.showFooterVaultCounts
   checkbox('setting-show-tags').checked = settings.showTagsInTitleBar
   checkbox('setting-show-folder-titlebar').checked = settings.showFolderInTitleBar
   checkbox('setting-folder-trailing').checked = settings.folderDotTrailing
@@ -3588,6 +3747,7 @@ bindToggle('setting-due', 'showDueSort', () => {
 bindToggle('setting-focus-editor', 'moveFocusToEditorOnEnter')
 bindToggle('setting-inbox-new', 'newNotesStartInInbox')
 bindToggle('setting-inbox-in-list', 'showInboxInMainList', () => void runSearch())
+bindToggle('setting-vault-counts', 'showFooterVaultCounts', () => void refreshVaultCounts())
 bindToggle('setting-show-tags', 'showTagsInTitleBar', () => {
   const open = results.find((n) => n.id === openNoteId)
   renderTitleBarTags(open?.tags ?? [])
@@ -3891,9 +4051,23 @@ async function anyEnvyWindowFocused(): Promise<boolean> {
   return focused.some(Boolean)
 }
 
+// While "Keep Envy on Top" is on, the auto-hide is suppressed — a window
+// pinned above everything that vanished the moment you clicked away would fight
+// itself. The tray toggle flips this over the `keep-on-top-changed` event, and
+// the initial value is read at boot. Mirrors the Mac, where keepOnTop
+// suppresses the same hide.
+let keepOnTopActive = false
+try {
+  void listen<boolean>('keep-on-top-changed', (e) => {
+    keepOnTopActive = e.payload
+  })
+} catch {
+  // Outside Tauri (dev in a plain browser).
+}
+
 try {
   void getCurrentWindow().onFocusChanged(async ({ payload: focused }) => {
-    if (focused || !settings.hideOnFocusLoss) return
+    if (focused || !settings.hideOnFocusLoss || keepOnTopActive) return
     // Settings is an in-page overlay rather than its own window, so it needs
     // its own guard — losing the panel mid-change would be the same accident.
     if (!settingsEl.classList.contains('hidden')) return
@@ -3911,6 +4085,13 @@ try {
 
 async function boot() {
   syncTheme()
+  // The on-top state is a Rust-side preference (toggled from the tray), so read
+  // the remembered value once at startup for the hide-on-focus-loss guard.
+  try {
+    keepOnTopActive = await invoke<boolean>('keep_on_top')
+  } catch {
+    // Outside Tauri.
+  }
   applyChromeSettings()
   document.body.classList.toggle('fade-focus', settings.fadeFocusHighlight)
   applyZoom()
@@ -3952,6 +4133,9 @@ async function boot() {
   view,
   wikiLinkTargetAt,
   wikiLinkRangeAt,
+  headingSlug,
+  headingRangeForSlug,
+  footnoteDefinitionRange,
   // Lets the interlinks panel be exercised without a backend, so its layout
   // can be checked in a plain browser rather than by driving the real app.
   // Positioning and dismissal are layout behaviour, checkable in a plain

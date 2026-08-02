@@ -459,6 +459,9 @@ const styles = {
   blockquote: mark('envy-blockquote'),
   blockquoteText: mark('envy-blockquote-text'),
   footnote: mark('envy-footnote'),
+  /// A footnote *reference* `[^1]` — the label rendered as a small raised
+  /// superscript in the link colour, with the `[^`/`]` hidden, matching the Mac.
+  footnoteRef: mark('envy-footnote-ref'),
   completedTask: mark('envy-completed-task'),
   marker: mark('envy-marker'),
   hr: mark('envy-hr'),
@@ -865,7 +868,22 @@ function buildDecorations(view: EditorView): DecorationSet {
       const s = base + m.index!
       const e = s + m[0].length
       if (insideCode(s, e)) continue
-      marks.push({ from: s, to: e, deco: styles.footnote })
+      // A definition marker "[^1]:" is styled by the definition pass above, not
+      // here — the colon straight after the "]" is what tells them apart.
+      if (doc.sliceString(e, e + 1) === ':') continue
+      const labelFrom = s + 2 // after "[^"
+      const labelTo = e - 1 // before "]"
+      marks.push({ from: labelFrom, to: labelTo, deco: styles.footnoteRef })
+      // Hide the "[^" and "]" so the reference reads as a bare superscript,
+      // revealing them (as markers) only when the cursor is inside — the same
+      // hide/reveal every other markup gets.
+      if (!selectionTouches(view, s, e)) {
+        marks.push({ from: s, to: labelFrom, deco: hidden })
+        marks.push({ from: labelTo, to: e, deco: hidden })
+      } else {
+        marks.push({ from: s, to: labelFrom, deco: styles.marker })
+        marks.push({ from: labelTo, to: e, deco: styles.marker })
+      }
     }
 
     for (const m of text.matchAll(P.hashtag)) {

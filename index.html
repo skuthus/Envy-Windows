@@ -92,6 +92,9 @@
             <span id="loading-indicator" class="hidden">Loading notes…</span>
             <span id="footer-clock" class="hidden"></span>
             <span id="stats"></span>
+            <!-- Whole-vault note (and, with subfolders on, folder) totals,
+                 sitting to the right of the open note's own counts. -->
+            <span id="vault-stats" class="hidden"></span>
           </div>
         </div>
       </div>
@@ -266,6 +269,14 @@
               <input type="checkbox" id="setting-inbox-in-list" />
               Show fleeting notes in the list
             </label>
+            <label>
+              <input type="checkbox" id="setting-vault-counts" />
+              Show note and folder counts in footer
+            </label>
+            <p class="setting-note">
+              Whole-vault totals, to the right of the word and character
+              counts. The folder count appears only when subfolders are shown.
+            </p>
           </section>
 
           <section>
