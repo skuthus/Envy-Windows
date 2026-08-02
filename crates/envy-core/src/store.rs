@@ -13,7 +13,10 @@ use std::time::SystemTime;
 use fancy_regex::Regex;
 use rayon::prelude::*;
 
-use crate::filename::{available_attachment_name, available_path, sanitize_title, unique_filename};
+use crate::filename::{
+    available_attachment_name, available_path, sanitize_attachment_name, sanitize_title,
+    unique_filename,
+};
 use crate::note::Note;
 use crate::search::INBOX_FOLDER_NAME;
 
@@ -666,6 +669,75 @@ impl NoteStore {
         let name = available_attachment_name(&format!("{base}.{ext}"), &dir);
         fs::write(dir.join(&name), bytes)?;
         Ok(name)
+    }
+
+    /// Renames an attachment file and rewrites every `![[old…]]` reference to it
+    /// across the vault, returning the final (de-duped) name — or `None` if the
+    /// file is missing or the move fails. Each referring note keeps its modified
+    /// time, so renaming a widely-used image doesn't reshuffle a date-sorted
+    /// list. Mirrors the Mac's `renameAttachment` + `updateAttachmentReferences`.
+    pub fn rename_attachment(&mut self, old_name: &str, new_name: &str) -> Option<String> {
+        let dir = self.attachments_dir();
+        let old_path = dir.join(old_name);
+        if !old_path.exists() {
+            return None;
+        }
+        // A rename to the same name (only case or whitespace differing) is a
+        // no-op — checked before de-dup, or the file being renamed would itself
+        // look like a collision and bump the name to "(2)".
+        if sanitize_attachment_name(new_name).eq_ignore_ascii_case(old_name) {
+            return Some(old_name.to_string());
+        }
+        let final_name = available_attachment_name(new_name, &dir);
+        fs::rename(&old_path, dir.join(&final_name)).ok()?;
+        self.update_attachment_references(old_name, &final_name);
+        Some(final_name)
+    }
+
+    /// Rewrites `![[old]]`, `![[old|size]]`, and `![[old|size|caption]]` to point
+    /// at `new_name` in every note that references the old attachment, keeping
+    /// the `|size|caption` suffix and each note's modified time. The twin of
+    /// `update_wiki_link_references`, but embed-only (the leading `!` is
+    /// required) and never touching note links.
+    fn update_attachment_references(&mut self, old_name: &str, new_name: &str) {
+        // Group 1 captures the `|size|caption` suffix so it survives the rewrite.
+        let pattern = format!(
+            r"(?i)!\[\[[ \t]*{}[ \t]*(\|[^\[\]]*)?\]\]",
+            fancy_regex::escape(old_name)
+        );
+        let Ok(re) = fancy_regex::Regex::new(&pattern) else {
+            return;
+        };
+        let replacement = format!("![[{new_name}${{1}}]]");
+        let old_lower = old_name.to_lowercase();
+
+        // Only notes that actually reference the old name — the embed target is
+        // in the wiki-links cache the same as any `[[link]]`.
+        let ids: Vec<String> = self
+            .notes
+            .iter()
+            .filter(|n| n.wiki_links().contains(&old_lower))
+            .map(|n| n.id().to_string())
+            .collect();
+
+        for id in ids {
+            let Some(idx) = self.notes.iter().position(|n| n.id() == id) else {
+                continue;
+            };
+            let content = self.notes[idx].content().to_string();
+            let updated = re.replace_all(&content, replacement.as_str()).into_owned();
+            if updated == content {
+                continue;
+            }
+            let path = self.notes[idx].url().to_path_buf();
+            let original_modified = self.notes[idx].modified;
+            if fs::write(&path, &updated).is_err() {
+                continue;
+            }
+            let _ = set_modified(&path, original_modified);
+            self.notes[idx].set_content(updated);
+            self.notes[idx].modified = original_modified;
+        }
     }
 
     /// Copies an external file into `Attachments/`, de-duped, returning the
@@ -1744,6 +1816,35 @@ mod tests {
         assert_eq!(stored, "photo.jpg");
         assert!(source.exists()); // a copy, not a move
         assert!(dir.path().join("Attachments/photo.jpg").exists());
+    }
+
+    #[test]
+    fn rename_attachment_moves_the_file_and_rewrites_references() {
+        let (dir, mut store) = nested_store_with(&[
+            ("A.md", "look ![[old.png|400]] here"),
+            ("sub/B.md", "and ![[old.png]] again"),
+            ("C.md", "no image, untouched"),
+        ]);
+        fs::create_dir_all(dir.path().join("Attachments")).unwrap();
+        fs::write(dir.path().join("Attachments/old.png"), b"img").unwrap();
+
+        let final_name = store.rename_attachment("old.png", "new.png").unwrap();
+        assert_eq!(final_name, "new.png");
+        assert!(!dir.path().join("Attachments/old.png").exists());
+        assert!(dir.path().join("Attachments/new.png").exists());
+        // The size suffix survives; every referencing note is rewritten.
+        assert_eq!(
+            fs::read_to_string(dir.path().join("A.md")).unwrap(),
+            "look ![[new.png|400]] here"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("sub/B.md")).unwrap(),
+            "and ![[new.png]] again"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.path().join("C.md")).unwrap(),
+            "no image, untouched"
+        );
     }
 
     #[test]

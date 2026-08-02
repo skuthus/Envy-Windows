@@ -78,12 +78,11 @@ pub fn sanitize_title(title: &str) -> String {
     s
 }
 
-/// A free filename in `directory` for an attachment, **preserving the original
-/// extension** and disambiguating the base with " (2)", " (3)"… — the shape the
-/// Mac's `availableAttachmentName` uses. The base is sanitized the same way a
-/// title is, but falls back to "attachment" rather than "Untitled"; the
-/// extension keeps it clear of the reserved-device-name case a bare stem hits.
-pub fn available_attachment_name(filename: &str, directory: &Path) -> String {
+/// Sanitizes an attachment filename, **preserving the original extension**. The
+/// base is cleaned the same way a title is but falls back to "attachment" rather
+/// than "Untitled"; the extension is left intact, so the file stays recognizably
+/// an image. No de-dup — see `available_attachment_name`.
+pub fn sanitize_attachment_name(filename: &str) -> String {
     let (raw_base, ext) = match filename.rsplit_once('.') {
         Some((b, e)) if !b.is_empty() && !e.is_empty() => (b, Some(e)),
         _ => (filename, None),
@@ -96,17 +95,36 @@ pub fn available_attachment_name(filename: &str, directory: &Path) -> String {
     if base.is_empty() {
         base = "attachment".to_string();
     }
-    let with = |b: &str| match ext {
+    match ext {
+        Some(e) => format!("{base}.{e}"),
+        None => base,
+    }
+}
+
+/// A free filename in `directory` for an attachment: the sanitized name if it's
+/// free, else the base disambiguated with " (2)", " (3)"… (extension kept) — the
+/// shape the Mac's `availableAttachmentName` uses.
+pub fn available_attachment_name(filename: &str, directory: &Path) -> String {
+    let sanitized = sanitize_attachment_name(filename);
+    if !directory.join(&sanitized).exists() {
+        return sanitized;
+    }
+    let (base, ext) = match sanitized.rsplit_once('.') {
+        Some((b, e)) => (b.to_string(), Some(e.to_string())),
+        None => (sanitized.clone(), None),
+    };
+    let with = |b: &str| match &ext {
         Some(e) => format!("{b}.{e}"),
         None => b.to_string(),
     };
-    let mut candidate = with(&base);
     let mut counter = 2;
-    while directory.join(&candidate).exists() {
-        candidate = with(&format!("{base} ({counter})"));
+    loop {
+        let candidate = with(&format!("{base} ({counter})"));
+        if !directory.join(&candidate).exists() {
+            return candidate;
+        }
         counter += 1;
     }
-    candidate
 }
 
 /// A free filename in `directory` for `title`, disambiguating with " 2",

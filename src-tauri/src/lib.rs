@@ -475,6 +475,32 @@ fn open_attachment(
         .map_err(|e| e.to_string())
 }
 
+/// Renames an attachment file and rewrites every `![[…]]` reference to it across
+/// the vault, returning the final (de-duped) name. The reference rewrites touch
+/// note files, so the caller refreshes the open note afterwards.
+#[tauri::command]
+fn rename_attachment(
+    old_name: String,
+    new_name: String,
+    state: State<AppState>,
+) -> Result<String, String> {
+    state.mark_internal_write();
+    state
+        .store
+        .lock()
+        .unwrap()
+        .rename_attachment(&old_name, &new_name)
+        .ok_or_else(|| "Could not rename the image.".to_string())
+}
+
+/// Selects an attachment in a new Explorer window — the "Reveal in Explorer"
+/// menu item, matching the Mac's activateFileViewerSelecting.
+#[tauri::command]
+fn reveal_attachment(name: String, state: State<AppState>) -> Result<(), String> {
+    let path = state.store.lock().unwrap().attachment_path(&name);
+    reveal_path(&path)
+}
+
 /// Every folder under the Index a note could be filed into, for the "Move to"
 /// menu. Walked fresh each time the menu opens rather than cached — folders
 /// change from outside Envy as easily as from within it.
@@ -1004,9 +1030,20 @@ fn reveal_index(state: State<AppState>) -> Result<(), String> {
 /// and silently opens the user's Documents folder instead of selecting the
 /// file. The form it actually wants is `/select,"<path>"`: the switch bare, only
 /// the path quoted. `raw_arg` appends exactly that, byte for byte.
+/// Selects `path` in a new Explorer window. `raw_arg`, not `arg`, for the
+/// reason spelled out on `reveal_note`: the switch stays bare and only the path
+/// is quoted, so a vault path with spaces still selects the file.
+fn reveal_path(path: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
+    std::process::Command::new("explorer")
+        .raw_arg(format!("/select,\"{}\"", path.display()))
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn reveal_note(id: String, state: State<AppState>) -> Result<(), String> {
-    use std::os::windows::process::CommandExt;
     let path = {
         let store = state.store.lock().unwrap();
         // Trash is searched too: "Reveal in Explorer" is offered on trashed
@@ -1019,11 +1056,7 @@ fn reveal_note(id: String, state: State<AppState>) -> Result<(), String> {
             .map(|n| n.url().to_path_buf())
             .ok_or_else(|| format!("no note with id {id}"))?
     };
-    std::process::Command::new("explorer")
-        .raw_arg(format!("/select,\"{}\"", path.display()))
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+    reveal_path(&path)
 }
 
 #[tauri::command]
@@ -1936,6 +1969,8 @@ pub fn run() {
             copy_attachment,
             read_attachment,
             open_attachment,
+            rename_attachment,
+            reveal_attachment,
             check_for_updates,
             reveal_folder,
             set_index_directory,

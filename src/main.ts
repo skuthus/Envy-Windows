@@ -212,6 +212,11 @@ const view = new EditorView({
             },
             { label: '', separator: true },
             { label: 'Open image', run: () => void invoke('open_attachment', { name: spec.name }) },
+            { label: 'Rename…', run: () => void renameAttachment(spec.name) },
+            {
+              label: 'Reveal in Explorer',
+              run: () => void invoke('reveal_attachment', { name: spec.name }),
+            },
           ])
         },
       }),
@@ -646,6 +651,54 @@ function rewriteEmbedMarker(oldText: string, newText: string) {
   const at = view.state.doc.toString().indexOf(oldText)
   if (at === -1) return
   view.dispatch({ changes: { from: at, to: at + oldText.length, insert: newText } })
+}
+
+/// Pulls the open note's text back from disk when it changed underneath the
+/// buffer — a transclusion source edited elsewhere, an attachment renamed (which
+/// rewrites references), the watcher firing. Skipped while unsaved keystrokes
+/// are in flight, since clobbering what someone is typing is worse than a
+/// moment's staleness.
+async function reloadOpenNoteFromDisk() {
+  if (!openNoteId || saveTimer !== undefined) return
+  const fresh = await invoke<NoteDto | null>('read_note', { id: openNoteId })
+  if (!fresh || fresh.content === null || fresh.content === view.state.doc.toString()) return
+  const cursor = view.state.selection.main.head
+  const changed = changedRange(view.state.doc.toString(), fresh.content)
+  view.dispatch({
+    changes: { from: 0, to: view.state.doc.length, insert: fresh.content },
+    selection: { anchor: Math.min(cursor, fresh.content.length) },
+  })
+  // What's on disk is now what's in the buffer, so a later save has nothing to
+  // write until the text actually changes again.
+  openNoteSavedContent = fresh.content
+  flashChangedRange(changed)
+}
+
+/// Renames an attachment from the image's right-click menu. The rewrite of every
+/// `![[…]]` reference happens in Rust; the open note is flushed first (so its
+/// references are on disk to rewrite) and reloaded after (so its buffer shows
+/// the new name rather than the old one it would otherwise save back).
+async function renameAttachment(oldName: string) {
+  const input = await textPrompt('Rename image to:', oldName)
+  if (input === null) return
+  let next = input.trim()
+  if (!next || next === oldName) return
+  // Keep the extension if the user dropped it, so the reference stays an image.
+  if (!next.includes('.')) {
+    const dot = oldName.lastIndexOf('.')
+    if (dot !== -1) next += oldName.slice(dot)
+  }
+  cancelPendingSave()
+  await save()
+  try {
+    await invoke<string>('rename_attachment', { oldName, newName: next })
+  } catch (e) {
+    await alertModal(typeof e === 'string' ? e : 'Could not rename the image.')
+    return
+  }
+  await runSearch()
+  refreshEmbeds()
+  await reloadOpenNoteFromDisk()
 }
 
 /// Saves a pasted image blob to Attachments/ and drops in its reference. The
@@ -3533,24 +3586,7 @@ void listen('index-changed', async () => {
   // should update where it's embedded, not keep showing what it looked like
   // when the host note was opened.
   refreshEmbeds()
-  // Reload the open note too, unless there are unsaved keystrokes in flight —
-  // overwriting the buffer someone is typing into is worse than showing them
-  // a stale copy for another moment.
-  if (openNoteId && saveTimer === undefined) {
-    const fresh = await invoke<NoteDto | null>('read_note', { id: openNoteId })
-    if (fresh && fresh.content !== null && fresh.content !== view.state.doc.toString()) {
-      const cursor = view.state.selection.main.head
-      const changed = changedRange(view.state.doc.toString(), fresh.content)
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: fresh.content },
-        selection: { anchor: Math.min(cursor, fresh.content.length) },
-      })
-      // What's on disk is now what's in the buffer, so a later save has
-      // nothing to write until the text actually changes again.
-      openNoteSavedContent = fresh.content
-      flashChangedRange(changed)
-    }
-  }
+  await reloadOpenNoteFromDisk()
 })
 
 // Summoning should land in the search box — the point of summoning is to type.
