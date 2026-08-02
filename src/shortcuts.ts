@@ -29,6 +29,7 @@ export type ShortcutId =
   | 'summonApp'
   | 'showPinnedNote'
   | 'unpinFromTray'
+  | 'keepOnTop'
 
 export interface ShortcutSpec {
   id: ShortcutId
@@ -47,6 +48,9 @@ export const SHORTCUT_SPECS: ShortcutSpec[] = [
   { id: 'summonApp', label: 'Show/Hide Envy (works from any app)', default: 'Ctrl+Alt+Enter', global: true },
   { id: 'showPinnedNote', label: 'Show/Hide Pinned Note (works from any app)', default: 'Ctrl+Alt+ArrowDown', global: true },
   { id: 'unpinFromTray', label: 'Unpin Note from Tray (works from any app)', default: 'Ctrl+Alt+Shift+P', global: true },
+  // The Mac binds Keep on Top to ⌥⌘T, but the port already gave Ctrl+Alt+T to
+  // "Pin to Tray", so this takes the free Shift variant by default (remappable).
+  { id: 'keepOnTop', label: 'Keep Envy on Top (works from any app)', default: 'Ctrl+Alt+Shift+T', global: true },
   { id: 'jumpToSearch', label: 'Jump to Search', default: 'Ctrl+L' },
   { id: 'clearSearch', label: 'Clear Search', default: 'Alt+Backspace' },
   { id: 'newFromTemplate', label: 'New Note from Template', default: 'Ctrl+Shift+N' },

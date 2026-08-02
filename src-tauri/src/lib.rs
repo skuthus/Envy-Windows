@@ -216,8 +216,50 @@ fn save_keep_on_top(app: &tauri::AppHandle, on: bool) {
 fn apply_keep_on_top(app: &tauri::AppHandle, on: bool) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.set_always_on_top(on);
+        if !on {
+            lower_below_foreground(&w);
+        }
         let _ = w.emit("keep-on-top-changed", on);
     }
+}
+
+/// After the topmost flag is cleared, drop the window behind whatever's now in
+/// front. Windows leaves a de-topmost'd window at the top of the *non*-topmost
+/// stack, so turning keep-on-top off from another app would leave Envy still
+/// sitting over it — nothing appears to happen. The Mac sets `.level = .normal`
+/// and the unfocused window naturally falls behind the active app; this mirrors
+/// that by re-inserting the window just under the current foreground window.
+/// A no-op when Envy itself is in front (e.g. toggled from its own window).
+fn lower_below_foreground(w: &tauri::WebviewWindow) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, SetWindowPos, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    };
+    let Ok(hwnd) = w.hwnd() else { return };
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() || fg == hwnd {
+            return;
+        }
+        let _ = SetWindowPos(
+            hwnd,
+            Some(fg),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+    }
+}
+
+/// Flips the on-top state, persists it, applies it, and refreshes the tray
+/// checkmark — the one action both the tray menu item and the global shortcut
+/// trigger, so the two can't drift.
+fn toggle_keep_on_top(app: &tauri::AppHandle) {
+    let on = !persisted_keep_on_top(app);
+    save_keep_on_top(app, on);
+    apply_keep_on_top(app, on);
+    refresh_tray_menu(app);
 }
 
 #[tauri::command]
@@ -1046,6 +1088,7 @@ fn set_global_shortcuts(
     summon: String,
     show_pinned: String,
     unpin: String,
+    keep_on_top: String,
     app: tauri::AppHandle,
     state: State<AppState>,
 ) -> Vec<String> {
@@ -1060,6 +1103,7 @@ fn set_global_shortcuts(
         ("summonApp", summon),
         ("showPinnedNote", show_pinned),
         ("unpinFromTray", unpin),
+        ("keepOnTop", keep_on_top),
     ] {
         let Some(shortcut) = parse_shortcut(&binding) else {
             failed.push(binding);
@@ -1109,6 +1153,7 @@ fn setup_global_hotkey(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error:
                         }
                     }
                     Some("showPinnedNote") => toggle_pinned_window(&handle),
+                    Some("keepOnTop") => toggle_keep_on_top(&handle),
                     Some("unpinFromTray") => {
                         if let Some(state) = handle.try_state::<AppState>() {
                             *state.pinned_note.lock().unwrap() = None;
@@ -1442,12 +1487,7 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                     let _ = app.emit("pinned-note-changed", ());
     refresh_tray_menu(app);
                 }
-                "keep_on_top" => {
-                    let on = !persisted_keep_on_top(app);
-                    save_keep_on_top(app, on);
-                    apply_keep_on_top(app, on);
-                    refresh_tray_menu(app);
-                }
+                "keep_on_top" => toggle_keep_on_top(app),
                 "settings" => {
                     if let Some(w) = app.get_webview_window("main") {
                         let _ = w.show();

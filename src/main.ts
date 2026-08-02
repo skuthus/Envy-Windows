@@ -3838,6 +3838,7 @@ async function syncGlobalShortcuts() {
     summon: g.summonApp,
     showPinned: g.showPinnedNote,
     unpin: g.unpinFromTray,
+    keepOnTop: g.keepOnTop,
   })
   if (failed.length > 0) {
     console.warn('these global shortcuts could not be registered:', failed)
