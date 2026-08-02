@@ -1323,6 +1323,28 @@ body.popout-window {
   background: var(--envy-background);
   color: var(--envy-text);
 }
+/* A number field paired with a unit dropdown, kept together at the row's right
+   edge (the group takes the auto margin so the two don't drift apart). */
+#settings-panel .setting-inline-group {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+#settings-panel .setting-inline-group select {
+  margin-left: 0;
+}
+#settings-panel input[type='number'] {
+  font: inherit;
+  font-size: 12px;
+  width: 4ch;
+  padding: 3px 6px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: var(--envy-background);
+  color: var(--envy-text);
+  text-align: right;
+}
 #settings-panel code {
   font-family: 'Cascadia Code', Consolas, ui-monospace, monospace;
   font-size: 0.92em;

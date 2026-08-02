@@ -1035,7 +1035,11 @@ const settings = {
   footerClockDateFormat: localStorage.getItem('footerClockDateFormat') ?? 'short',
   boldFileListText: boolSetting('boldFileListText', false),
   templateDateFormat: localStorage.getItem('templateDateFormat') ?? 'yyyy-MM-dd',
-  trashMaxAgeDays: Number(localStorage.getItem('trashMaxAgeDays') ?? '0'),
+  // How often the whole Trash is swept into the Recycle Bin — a count and a unit
+  // (days/weeks/months), matching the Mac's TrashPreference. Default every 30
+  // days. Clamped 1–99 on entry, so the trash always empties on some schedule.
+  trashEmptyIntervalValue: Number(localStorage.getItem('trashEmptyIntervalValue') ?? '30'),
+  trashEmptyIntervalUnit: localStorage.getItem('trashEmptyIntervalUnit') ?? 'days',
 }
 
 function saveSetting(key: string, value: string | boolean | number) {
@@ -3681,7 +3685,8 @@ function openSettings() {
   dropdown('setting-clock-date-format').value = settings.footerClockDateFormat
   recording = null
   renderShortcutSettings()
-  dropdown('setting-trash-age').value = String(settings.trashMaxAgeDays)
+  el<HTMLInputElement>('setting-trash-interval').value = String(settings.trashEmptyIntervalValue)
+  dropdown('setting-trash-unit').value = settings.trashEmptyIntervalUnit
   el<HTMLInputElement>('setting-template-date').value = settings.templateDateFormat
   updateTemplateDatePreview()
   dropdown('setting-layout').value = layoutMode
@@ -3833,9 +3838,19 @@ dropdown('setting-link-preview').onchange = (e) => {
   if (settings.linkPreview === 'off') hideLinkPreview()
 }
 
-dropdown('setting-trash-age').onchange = (e) => {
-  settings.trashMaxAgeDays = Number((e.target as HTMLSelectElement).value)
-  saveSetting('trashMaxAgeDays', settings.trashMaxAgeDays)
+// Committed on change/blur rather than each keystroke, and clamped 1–99 the way
+// the Mac clamps its field — an empty or out-of-range value would otherwise make
+// the interval meaningless. The clamped number is written back to the field.
+el<HTMLInputElement>('setting-trash-interval').onchange = () => {
+  const field = el<HTMLInputElement>('setting-trash-interval')
+  const clamped = Math.min(99, Math.max(1, Math.round(Number(field.value) || 0)))
+  settings.trashEmptyIntervalValue = clamped
+  field.value = String(clamped)
+  saveSetting('trashEmptyIntervalValue', clamped)
+}
+dropdown('setting-trash-unit').onchange = (e) => {
+  settings.trashEmptyIntervalUnit = (e.target as HTMLSelectElement).value
+  saveSetting('trashEmptyIntervalUnit', settings.trashEmptyIntervalUnit)
 }
 
 el<HTMLInputElement>('setting-template-date').oninput = () => {
@@ -4006,8 +4021,47 @@ el<HTMLSelectElement>('setting-theme').onchange = (e) => {
 }
 el('settings-open-folder').onclick = () => void invoke('reveal_index')
 
-// Confirmed, because this is the one action in the app that destroys notes
-// with no way back — everything else routes through the trash first.
+/// The moment a trash emptied at `fromMs` next falls due, adding the interval
+/// as real calendar units — a month means the same day next month, not a fixed
+/// 30 days — matching the Mac's Calendar.date(byAdding:).
+function trashDueAfter(fromMs: number, value: number, unit: string): number {
+  const d = new Date(fromMs)
+  if (unit === 'weeks') d.setDate(d.getDate() + value * 7)
+  else if (unit === 'months') d.setMonth(d.getMonth() + value)
+  else d.setDate(d.getDate() + value)
+  return d.getTime()
+}
+
+/// Empties the trash into the Recycle Bin if enough time has passed since the
+/// last empty, then records now as the new baseline — the Windows half of the
+/// Mac's TrashPreference.emptyIfDue, called at launch and hourly. The schedule
+/// lives here because the interval settings and the baseline are the frontend's.
+async function emptyTrashIfDue() {
+  const key = 'trashLastEmptiedDate'
+  const stored = Number(localStorage.getItem(key))
+  // No usable baseline (fresh install, or upgrading from the old age-based
+  // model): start the clock now rather than sweeping an existing trash the
+  // instant this version first runs. The first auto-empty is then one interval
+  // out, which is the least surprising thing on a first encounter.
+  if (!Number.isFinite(stored) || stored <= 0) {
+    localStorage.setItem(key, String(Date.now()))
+    return
+  }
+  const due = trashDueAfter(
+    stored,
+    settings.trashEmptyIntervalValue,
+    settings.trashEmptyIntervalUnit,
+  )
+  if (Date.now() < due) return
+  const emptied = await invoke<number>('empty_trash')
+  localStorage.setItem(key, String(Date.now()))
+  // Repaint if the user happens to be looking at the trash when it's swept.
+  if (emptied > 0) await runSearch()
+}
+
+// Confirmed because it clears the whole trash at once — but recoverable now:
+// the notes go to the Recycle Bin, the same as the Mac sends them to the macOS
+// Trash. Empties the same schedule the timer does, so the baseline resets here.
 el('setting-empty-trash').onclick = async () => {
   const waiting = await invoke<NoteDto[]>('trashed_notes', { fragment: '' })
   if (waiting.length === 0) {
@@ -4015,11 +4069,12 @@ el('setting-empty-trash').onclick = async () => {
     return
   }
   const ok = await confirmModal(
-    `Permanently delete ${waiting.length} note${waiting.length === 1 ? '' : 's'}? This cannot be undone.`,
-    'Delete',
+    `Move ${waiting.length} note${waiting.length === 1 ? '' : 's'} to the Recycle Bin?`,
+    'Empty Trash',
   )
   if (!ok) return
   await invoke('empty_trash')
+  localStorage.setItem('trashLastEmptiedDate', String(Date.now()))
   await runSearch()
 }
 
@@ -4137,12 +4192,11 @@ async function boot() {
   // startup, so this is the only path — defaults and remaps go the same way.
   await syncGlobalShortcuts()
   if (!settings.showInTaskbar) await invoke('set_show_in_taskbar', { show: false })
-  // Swept at launch rather than on a timer: a note app isn't reliably running
-  // when a timer would fire, and "cleared next time you opened Envy" is both
-  // easier to reason about and impossible to miss.
-  if (settings.trashMaxAgeDays > 0) {
-    await invoke('sweep_trash', { maxAgeDays: settings.trashMaxAgeDays })
-  }
+  // The Mac empties on launch and then hourly: a summon/hide app can run for
+  // weeks without a relaunch, so a launch-only check can't keep an "every N
+  // days" schedule honest. Cheap on the ticks it isn't due — just a date compare.
+  void emptyTrashIfDue()
+  window.setInterval(() => void emptyTrashIfDue(), 60 * 60 * 1000)
   await runSearch()
   searchInput.focus()
 }

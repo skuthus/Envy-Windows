@@ -607,15 +607,20 @@ impl NoteStore {
         Some(restored)
     }
 
+    /// Sends a single trashed note to the Recycle Bin rather than erasing it,
+    /// so nothing the app does is ever truly unrecoverable — the Mac's
+    /// deleteFromTrash moves the file to the macOS Trash the same way.
     pub fn delete_from_trash(&mut self, note: &Note) {
-        let _ = fs::remove_file(note.url());
+        let _ = trash::delete(note.url());
         self.refresh_trashed();
     }
 
+    /// Empties every `.trash` subfolder into the Recycle Bin in one go — the
+    /// second, slower stage of deletion, driven on a schedule by the app layer.
+    /// Recycled, not erased, matching the Mac's emptyTrash (trashItem).
     pub fn empty_trash(&mut self) {
-        for dir in all_trash_directories(&self.directory) {
-            let _ = fs::remove_dir_all(&dir);
-        }
+        let dirs = all_trash_directories(&self.directory);
+        let _ = trash::delete_all(&dirs);
         self.refresh_trashed();
     }
 

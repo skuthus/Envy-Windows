@@ -12,6 +12,9 @@ dunce.workspace = true
 notify.workspace = true
 serde.workspace = true
 chrono.workspace = true
+# Sends emptied/deleted notes to the Windows Recycle Bin rather than erasing
+# them, matching the Mac moving trashed items to the macOS Trash (recoverable).
+trash = "5"
 
 [dev-dependencies]
 tempfile = "3"

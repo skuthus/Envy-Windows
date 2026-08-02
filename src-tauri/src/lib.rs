@@ -587,35 +587,6 @@ fn delete_from_trash(id: String, state: State<AppState>) -> Result<(), String> {
     Ok(())
 }
 
-/// Deletes trashed notes older than `max_age_days`, for the scheduled sweep.
-///
-/// Age is the file's modification time, which for a trashed note is when it
-/// was deleted — moving a file doesn't touch it. Returns how many went.
-///
-/// Runs on launch rather than on a timer. A note-taking app is not reliably
-/// running when a timer would fire, and "swept the next time you opened Envy"
-/// is both easier to reason about and impossible to miss.
-#[tauri::command]
-fn sweep_trash(max_age_days: u64, state: State<AppState>) -> usize {
-    if max_age_days == 0 {
-        return 0;
-    }
-    let cutoff = std::time::SystemTime::now()
-        - std::time::Duration::from_secs(max_age_days * 24 * 60 * 60);
-    state.mark_internal_write();
-    let mut store = state.store.lock().unwrap();
-    let stale: Vec<_> = store
-        .trashed_notes()
-        .iter()
-        .filter(|n| n.modified < cutoff)
-        .cloned()
-        .collect();
-    for note in &stale {
-        store.delete_from_trash(note);
-    }
-    stale.len()
-}
-
 /// Reveals one of the Index's own folders. `which` is "index", "templates" or
 /// "trash" — the trash folder is the one beside the Index root, which is where
 /// top-level deletions land.
@@ -1889,7 +1860,6 @@ pub fn run() {
             restore_from_trash,
             delete_from_trash,
             empty_trash,
-            sweep_trash,
             reveal_folder,
             set_index_directory,
             set_template_date_format,
