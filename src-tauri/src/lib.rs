@@ -1367,6 +1367,21 @@ async fn run_update_check(app: tauri::AppHandle, manual: bool) {
             }
         }
     }
+
+    // A check ran to completion (found nothing, failed, or the user deferred an
+    // install) — tell the frontend so it can stamp "last checked". Fires for
+    // every path here, so a tray-triggered check updates the label too. Not
+    // reached when an install starts, since that exits the process first.
+    let _ = app.emit("update-checked", ());
+}
+
+/// The frontend's entry point to the same check the tray command and the launch
+/// task run — used both for the automatic check at boot (when the setting is on)
+/// and the Settings "Check Now" button. `manual` gets the "you're up to date"
+/// reassurance; the background check stays silent when it finds nothing.
+#[tauri::command]
+async fn check_for_updates(app: tauri::AppHandle, manual: bool) {
+    run_update_check(app, manual).await;
 }
 
 /// Re-applies the tray menu after anything it reflects has changed.
@@ -1788,13 +1803,11 @@ pub fn run() {
 
             let store = NoteStore::open(&dir, false)?;
 
-            // The scheduled background check, matching Sparkle's
-            // `startingUpdater: true` on the Mac. Spawned rather than awaited so
-            // a slow or unreachable endpoint delays nothing — the window opens
-            // regardless and the dialog appears later if there is anything to
-            // say.
-            let updater_handle = app.handle().clone();
-            tauri::async_runtime::spawn(run_update_check(updater_handle, false));
+            // The launch check is driven by the frontend now (main.ts, gated on
+            // the "Check for updates automatically" setting), so it isn't spawned
+            // here. That keeps one owner for the toggle — the frontend, which is
+            // where the setting lives — rather than splitting it across a file
+            // the Rust side would also have to read.
 
             let suppress_until = Arc::new(Mutex::new(Instant::now()));
 
@@ -1860,6 +1873,7 @@ pub fn run() {
             restore_from_trash,
             delete_from_trash,
             empty_trash,
+            check_for_updates,
             reveal_folder,
             set_index_directory,
             set_template_date_format,

@@ -1040,6 +1040,9 @@ const settings = {
   // days. Clamped 1–99 on entry, so the trash always empties on some schedule.
   trashEmptyIntervalValue: Number(localStorage.getItem('trashEmptyIntervalValue') ?? '30'),
   trashEmptyIntervalUnit: localStorage.getItem('trashEmptyIntervalUnit') ?? 'days',
+  // Gates the automatic check at launch (the "Check Now" button ignores it).
+  // On by default, matching the Mac's Sparkle default.
+  checkForUpdatesAutomatically: boolSetting('checkForUpdatesAutomatically', true),
 }
 
 function saveSetting(key: string, value: string | boolean | number) {
@@ -3429,6 +3432,35 @@ void listen('new-note', () => {
 })
 void listen('open-settings', () => openSettings())
 
+/// "Last checked …" line for the Updates section, relative like the Mac's
+/// RelativeDateTimeFormatter. The timestamp is stamped by the update-checked
+/// listener below, so every check — launch, tray, or "Check Now" — feeds it.
+function lastCheckedDescription(): string {
+  const stored = Number(localStorage.getItem('updateLastCheckedDate'))
+  if (!Number.isFinite(stored) || stored <= 0) return 'Last checked: never'
+  const diffSec = Math.round((Date.now() - stored) / 1000)
+  if (diffSec < 60) return 'Last checked just now'
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' })
+  const min = Math.round(diffSec / 60)
+  if (min < 60) return `Last checked ${rtf.format(-min, 'minute')}`
+  const hr = Math.round(min / 60)
+  if (hr < 24) return `Last checked ${rtf.format(-hr, 'hour')}`
+  return `Last checked ${rtf.format(-Math.round(hr / 24), 'day')}`
+}
+
+function renderLastChecked() {
+  const label = document.getElementById('setting-update-last-checked')
+  if (label) label.textContent = lastCheckedDescription()
+}
+
+// Rust fires this when any update check finishes (found nothing, failed, or an
+// install was deferred). Stamp now as the last-checked time so the label is
+// accurate no matter which path — launch, tray, or button — ran the check.
+void listen('update-checked', () => {
+  localStorage.setItem('updateLastCheckedDate', String(Date.now()))
+  renderLastChecked()
+})
+
 // The tray pin can be cleared from the popover or the global unpin shortcut,
 // so the marker in the list has to follow rather than assume.
 void listen('pinned-note-changed', async () => {
@@ -3672,6 +3704,8 @@ function openSettings() {
   checkbox('setting-show-interlinks').checked = settings.showBacklinks
   checkbox('setting-hide-on-blur').checked = settings.hideOnFocusLoss
   checkbox('setting-restore-focus').checked = settings.restoreFocusOnSummon
+  checkbox('setting-auto-update').checked = settings.checkForUpdatesAutomatically
+  renderLastChecked()
   dropdown('setting-date-style').value = settings.dateDisplayStyle
   dropdown('setting-link-preview').value = settings.linkPreview
   dropdown('setting-density').value = settings.listDensity
@@ -3791,6 +3825,12 @@ checkbox('setting-plain-text').onchange = (e) => {
 bindToggle('setting-show-interlinks', 'showBacklinks', renderInterlinks)
 bindToggle('setting-hide-on-blur', 'hideOnFocusLoss')
 bindToggle('setting-restore-focus', 'restoreFocusOnSummon')
+bindToggle('setting-auto-update', 'checkForUpdatesAutomatically')
+// Always checks, regardless of the auto toggle — that's the point of asking.
+// `manual: true` gets the "you're up to date" reassurance a background check
+// stays silent about. The update-checked event stamps the last-checked line.
+el('setting-check-updates').onclick = () =>
+  void invoke('check_for_updates', { manual: true })
 
 dropdown('setting-date-style').onchange = (e) => {
   settings.dateDisplayStyle = (e.target as HTMLSelectElement).value
@@ -4197,6 +4237,12 @@ async function boot() {
   // days" schedule honest. Cheap on the ticks it isn't due — just a date compare.
   void emptyTrashIfDue()
   window.setInterval(() => void emptyTrashIfDue(), 60 * 60 * 1000)
+  // The launch update check, matching Sparkle's startingUpdater on the Mac.
+  // Fire-and-forget so a slow or unreachable endpoint delays nothing; a dialog
+  // appears later only if there's an update. Silent when it finds nothing.
+  if (settings.checkForUpdatesAutomatically) {
+    void invoke('check_for_updates', { manual: false })
+  }
   await runSearch()
   searchInput.focus()
 }

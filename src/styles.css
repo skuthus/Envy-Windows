@@ -626,6 +626,16 @@ body.bold-file-list .row-date { font-weight: 700; }
   line-height: 1.5;
   color: var(--envy-blockquote);
 }
+/* Last-checked line on the left, "Check Now" on the right — the Mac's Text +
+   Spacer + Button row. The note keeps its colour but drops its top margin so it
+   sits centred against the button. */
+#settings-panel .update-check-row {
+  align-items: center;
+  justify-content: space-between;
+}
+#settings-panel .update-check-row .setting-note {
+  margin: 0;
+}
 
 /* `min-height: 0` and `min-width: 0` are both load-bearing, not defensive. A
    flex item defaults to `min-*: auto`, meaning it refuses to shrink below its
