@@ -3278,6 +3278,8 @@ const SHORTCUT_HANDLERS: Partial<Record<ShortcutId, () => void>> = {
   togglePlainTextMode: () => {
     plainTextMode = !plainTextMode
     applyPlainTextMode()
+    // Keep the Settings checkbox honest if the panel happens to be open.
+    checkbox('setting-plain-text').checked = plainTextMode
   },
   toggleInterlinks: () => interlinksToggleEl.click(),
   toggleLayout,
@@ -3656,6 +3658,9 @@ function openSettings() {
   checkbox('setting-folder-trailing').disabled = !settings.includeSubfolders
   checkbox('setting-show-due-pill').checked = settings.showDuePill
   checkbox('setting-require-modifier').checked = settings.requireModifierForLinkClick
+  // Not part of `settings`: plain-text mode is its own live variable, toggled by
+  // shortcut too, so the checkbox reads that rather than the settings object.
+  checkbox('setting-plain-text').checked = plainTextMode
   checkbox('setting-show-interlinks').checked = settings.showBacklinks
   checkbox('setting-hide-on-blur').checked = settings.hideOnFocusLoss
   checkbox('setting-restore-focus').checked = settings.restoreFocusOnSummon
@@ -3765,6 +3770,12 @@ bindToggle('setting-show-due-pill', 'showDuePill', () => {
   renderDueBadge(open?.due ?? null)
 })
 bindToggle('setting-require-modifier', 'requireModifierForLinkClick')
+// Plain-text mode isn't a `settings` key (it's a live variable the shortcut
+// flips too), so it can't ride bindToggle — wire it straight to the same apply.
+checkbox('setting-plain-text').onchange = (e) => {
+  plainTextMode = (e.target as HTMLInputElement).checked
+  applyPlainTextMode()
+}
 bindToggle('setting-show-interlinks', 'showBacklinks', renderInterlinks)
 bindToggle('setting-hide-on-blur', 'hideOnFocusLoss')
 bindToggle('setting-restore-focus', 'restoreFocusOnSummon')
