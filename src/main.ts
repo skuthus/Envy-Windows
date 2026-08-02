@@ -1011,6 +1011,9 @@ const settings = {
   // The Inbox mark always leads regardless — it's a different kind of signal.
   folderDotTrailing: boolSetting('folderDotTrailing', true),
   showDuePill: boolSetting('showDuePill', true),
+  // Read directly by the styler (styler.ts domainPillsEnabled); kept here so the
+  // Settings checkbox and its persistence go through the same path as the rest.
+  linkDomainPills: boolSetting('linkDomainPills', true),
   requireModifierForLinkClick: boolSetting('requireModifierForLinkClick', true),
   showBacklinks: boolSetting('showBacklinks', true),
   // Named for its storage key, not for the DOM event behind it. `bindToggle`
@@ -3657,6 +3660,7 @@ function openSettings() {
   dropdown('setting-folder-display').disabled = !settings.includeSubfolders
   checkbox('setting-folder-trailing').disabled = !settings.includeSubfolders
   checkbox('setting-show-due-pill').checked = settings.showDuePill
+  checkbox('setting-domain-pills').checked = settings.linkDomainPills
   checkbox('setting-require-modifier').checked = settings.requireModifierForLinkClick
   // Not part of `settings`: plain-text mode is its own live variable, toggled by
   // shortcut too, so the checkbox reads that rather than the settings object.
@@ -3769,6 +3773,9 @@ bindToggle('setting-show-due-pill', 'showDuePill', () => {
   const open = results.find((n) => n.id === openNoteId)
   renderDueBadge(open?.due ?? null)
 })
+bindToggle('setting-domain-pills', 'linkDomainPills', () =>
+  view.dispatch({ effects: restyle.of(null) }),
+)
 bindToggle('setting-require-modifier', 'requireModifierForLinkClick')
 // Plain-text mode isn't a `settings` key (it's a live variable the shortcut
 // flips too), so it can't ride bindToggle — wire it straight to the same apply.

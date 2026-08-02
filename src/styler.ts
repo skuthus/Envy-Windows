@@ -403,6 +403,13 @@ function domainEmoji(domain: string): string | null {
   }
 }
 
+/// Whether bare URLs collapse to domain pills. Read from localStorage for the
+/// same reason as the emoji map — the setting changes rarely and a restyle
+/// repaints when it does. Defaults on, matching the Mac.
+function domainPillsEnabled(): boolean {
+  return localStorage.getItem('linkDomainPills') !== 'false'
+}
+
 /// A bare URL collapsed to `emoji domain ↗`.
 class UrlPillWidget extends WidgetType {
   constructor(
@@ -883,6 +890,7 @@ function buildDecorations(view: EditorView): DecorationSet {
       }
     }
 
+    const domainPills = domainPillsEnabled()
     for (const re of [P.autolinkBracket, P.bareURL]) {
       for (const m of text.matchAll(re)) {
         const s = base + m.index!
@@ -895,6 +903,9 @@ function buildDecorations(view: EditorView): DecorationSet {
         // autolinks keep their full text: someone wrote the brackets to say
         // "this is a URL", and hiding it would undo that.
         if (re !== P.bareURL) continue
+        // With pills off, the URL stays a full-length link — still styled and
+        // clickable, just never collapsed. Matches the Mac's linkDomainPills.
+        if (!domainPills) continue
         const domain = urlDomain(m[0])
         // No `://host` to show means nothing to collapse to, so it stays a
         // plain full-length link rather than becoming an empty pill.
