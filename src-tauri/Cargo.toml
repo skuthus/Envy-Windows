@@ -1,6 +1,6 @@
 [package]
 name = "envy-windows"
-version = "0.1.4"
+version = "1.8.0-beta"
 description = "A flat-file, frictionless note-taking application for Windows"
 authors = ["Skyler Schoos"]
 edition = "2021"
