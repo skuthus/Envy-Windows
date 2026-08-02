@@ -776,6 +776,15 @@ body.popover {
 
 #pinned-editor { flex: 1; min-height: 0; overflow: hidden; }
 
+/* A popped-out note fills its own (natively decorated) window. */
+body.popout-window {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--envy-background);
+}
+#popout-editor { flex: 1; min-height: 0; overflow: hidden; padding: 4px 10px; }
+
 /* --- Footer and interlinks --------------------------------------------------
    The panel sits directly above the footer bar so expanding grows it upward
    into the editor, rather than pushing the footer down and shifting the whole

@@ -2662,6 +2662,10 @@ function noteMenuItems(note: NoteDto): MenuItemSpec[] {
       },
     },
     {
+      label: 'Pop Out',
+      run: () => void invoke('pop_out_note', { id: note.id, title: note.title }),
+    },
+    {
       label: 'Rename',
       run: async () => {
         await openNote(note.id)

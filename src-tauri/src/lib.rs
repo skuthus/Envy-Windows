@@ -98,6 +98,11 @@ pub struct AppState {
     /// note without any window involved, so it cannot ask the frontend what
     /// format to use.
     template_date_format: Mutex<String>,
+    /// Pop-out windows: their label → the note id each one shows. A window's
+    /// label can't carry the id (an id is a file path, full of characters a
+    /// label forbids), so the page asks for its note through this map. Dead
+    /// entries are swept lazily whenever a new pop-out is made.
+    popouts: Mutex<std::collections::HashMap<String, String>>,
 }
 
 /// Translates the Mac's date tokens to chrono's strftime.
@@ -1588,6 +1593,94 @@ fn toggle_pinned_window(app: &tauri::AppHandle) {
     }
 }
 
+/// Opens a note in its own floating window — the "Pop Out" context-menu action.
+/// Several can be open at once, one per note; popping a note out again just
+/// surfaces its window. A note id is a file path, which a window label can't
+/// hold, so the label is a hash of it and the id is stashed in state for the
+/// page to read back through `popout_note_id`.
+/// Async on purpose: a sync command runs on the main thread, and building a
+/// window from there needs the same event loop to start the new webview — the
+/// loop ends up waiting on itself and the app freezes (shell appears, page
+/// never loads). Async runs this on a worker thread, so `run_on_main_thread`
+/// genuinely hands the build to the free loop instead of running it inline.
+#[tauri::command]
+async fn pop_out_note(id: String, title: String, app: tauri::AppHandle) {
+    use std::hash::{Hash, Hasher};
+
+    enum Action {
+        Surface(String),
+        Create(String, f64),
+    }
+    // Decide under the lock, then drop it before touching any window.
+    let action = {
+        let state = app.state::<AppState>();
+        let mut popouts = state.popouts.lock().unwrap();
+        // Sweep windows that have since closed, so a stale label never shadows a
+        // fresh pop-out and the cascade count stays honest.
+        popouts.retain(|label, _| app.get_webview_window(label).is_some());
+        if let Some(existing) = popouts.iter().find(|(_, nid)| *nid == &id).map(|(l, _)| l.clone()) {
+            Action::Surface(existing)
+        } else {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            id.hash(&mut hasher);
+            let label = format!("popout-{:x}", hasher.finish());
+            // Cascade each new one down-and-right, wrapping every 8.
+            let step = (popouts.len() % 8) as f64 * 26.0;
+            popouts.insert(label.clone(), id.clone());
+            Action::Create(label, step)
+        }
+    };
+
+    match action {
+        // Already popped out — surface it rather than opening a second copy.
+        Action::Surface(label) => {
+            if let Some(w) = app.get_webview_window(&label) {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }
+        Action::Create(label, step) => {
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                let built = tauri::WebviewWindowBuilder::new(
+                    &handle,
+                    &label,
+                    tauri::WebviewUrl::App("popout.html".into()),
+                )
+                .title(&title)
+                .inner_size(440.0, 480.0)
+                .position(140.0 + step, 120.0 + step)
+                .min_inner_size(240.0, 160.0)
+                .resizable(true)
+                // No minimize or maximize: the window is skip_taskbar, so a
+                // minimized one would vanish with no taskbar button to restore
+                // it. Only close remains, closest to the Mac's button-less
+                // pop-out panel — dragging and edge-resize still work.
+                .minimizable(false)
+                .maximizable(false)
+                // Floats above the main window like the Mac's pop-out panel,
+                // and stays out of the taskbar so a handful don't clutter it.
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .build();
+                if let Err(e) = built {
+                    eprintln!("could not open pop-out window: {e}");
+                    if let Some(s) = handle.try_state::<AppState>() {
+                        s.popouts.lock().unwrap().remove(&label);
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// The note id the calling pop-out window is showing.
+#[tauri::command]
+fn popout_note_id(window: tauri::WebviewWindow, state: State<AppState>) -> Option<String> {
+    state.popouts.lock().unwrap().get(window.label()).cloned()
+}
+
 /// Whether the app launches at login.
 /// Where Envy appears outside its own window.
 ///
@@ -1719,6 +1812,7 @@ pub fn run() {
                 _watcher: Mutex::new(watcher),
                 global_shortcuts: Mutex::new(std::collections::HashMap::new()),
                 template_date_format: Mutex::new("yyyy-MM-dd".to_string()),
+                popouts: Mutex::new(std::collections::HashMap::new()),
             });
 
             setup_global_hotkey(app.handle())?;
@@ -1780,6 +1874,8 @@ pub fn run() {
             pinned_note_id,
             set_pinned_note,
             open_in_main_window,
+            pop_out_note,
+            popout_note_id,
             reload,
         ])
         .run(tauri::generate_context!())

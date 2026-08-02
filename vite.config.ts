@@ -7,11 +7,12 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   build: {
     rollupOptions: {
-      // Two entry points: the app, and the small always-on-top popover the
-      // tray opens for a pinned note.
+      // Entry points: the app, the tray's pinned-note popover, and the
+      // floating pop-out note window.
       input: {
         main: "index.html",
         pinned: "pinned.html",
+        popout: "popout.html",
       },
     },
   },

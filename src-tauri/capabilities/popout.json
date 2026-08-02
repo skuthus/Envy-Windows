@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "popout",
+  "description": "Pop-out note windows. Their labels are generated (popout-<hash of the note id>), so they're matched by glob rather than named one by one the way the main and pinned windows are. Same base as the default capability, plus allow-close so the window can close itself on Escape (the native title bar's close button needs no permission, but a scripted close() does).",
+  "windows": ["popout-*"],
+  "permissions": [
+    "core:default",
+    "opener:default",
+    "core:window:allow-hide",
+    "core:window:allow-close"
+  ]
+}

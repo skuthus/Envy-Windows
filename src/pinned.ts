@@ -16,6 +16,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { envyStyler } from './styler'
+import { listEditing } from './lists'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 
 // This window is where the silent-failure pattern first bit — see `hide()`
@@ -37,6 +38,38 @@ const editorEl = document.getElementById('pinned-editor')!
 let noteId: string | null = null
 let savedContent = ''
 let saveTimer: number | undefined
+// Shared with the main window through the common origin's localStorage.
+const requireModifier = localStorage.getItem('requireModifierForLinkClick') !== 'false'
+
+/// The `[[…]]` target at a position — alias and heading stripped, as the main
+/// window resolves it.
+function wikiLinkTargetAt(v: EditorView, pos: number): string | null {
+  const line = v.state.doc.lineAt(pos)
+  const re = /!?\[\[([^\[\]]+)\]\]/g
+  for (const m of line.text.matchAll(re)) {
+    const from = line.from + m.index!
+    const to = from + m[0].length
+    if (pos >= from && pos <= to) {
+      const target = m[1].split('|')[0].split('#')[0].trim()
+      return target || null
+    }
+  }
+  return null
+}
+
+/// Following a link opens the target in the main window (creating it if
+/// needed) — the same drive-the-main-editor behaviour the pop-out has. Bringing
+/// the main window forward blurs this popover, which then hides itself unless
+/// it's been kept open.
+async function followInMain(target: string) {
+  await flush()
+  try {
+    const note = await invoke<NoteDto>('open_link', { target })
+    await invoke('open_in_main_window', { id: note.id })
+  } catch (e) {
+    console.error('could not follow the link', e)
+  }
+}
 
 const view = new EditorView({
   state: EditorState.create({
@@ -44,9 +77,25 @@ const view = new EditorView({
     extensions: [
       history(),
       drawSelection(),
+      // List continuation / indent / renumber, as in the main and pop-out
+      // editors.
+      listEditing,
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
       envyStyler,
+      EditorView.domEventHandlers({
+        mousedown: (event, v) => {
+          if (event.button !== 0) return false
+          const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
+          if (pos === null) return false
+          if (requireModifier && !event.ctrlKey) return false
+          const target = wikiLinkTargetAt(v, pos)
+          if (!target) return false
+          event.preventDefault()
+          void followInMain(target)
+          return true
+        },
+      }),
       EditorView.updateListener.of((u) => {
         if (u.docChanged && noteId) {
           window.clearTimeout(saveTimer)
