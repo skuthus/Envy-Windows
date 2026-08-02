@@ -207,6 +207,16 @@ const view = new EditorView({
           if (settings.requireModifierForLinkClick && !event.ctrlKey) return false
           const target = wikiLinkTargetAt(v, pos)
           if (!target) return false
+          // With plain click-to-follow on, a click inside the link the caret
+          // already sits in is an edit, not a navigation — otherwise a note
+          // that is only a link (or repositioning within any link you've
+          // entered) could never be clicked into. Ctrl still follows,
+          // unconditionally. Mirrors the Mac's caretIsInsideWikiLink carve-out.
+          if (!event.ctrlKey) {
+            const range = wikiLinkRangeAt(v, pos)
+            const caret = v.state.selection.main.from
+            if (range && caret >= range.from && caret <= range.to) return false
+          }
           event.preventDefault()
           void followLink(target)
           return true
@@ -412,6 +422,19 @@ interlinksToggleEl.onclick = () => {
 /// ranges aren't addressable after the fact, and a line is short enough that
 /// re-matching it costs nothing. Handles `![[embed]]` too — the leading `!`
 /// changes how it renders, not where it points.
+/// The full `[[…]]` (or `![[…]]`) span at a position, or null — for deciding
+/// whether a click landed inside a link the caret already occupies.
+function wikiLinkRangeAt(v: EditorView, pos: number): { from: number; to: number } | null {
+  const line = v.state.doc.lineAt(pos)
+  const re = /!?\[\[([^\[\]]+)\]\]/g
+  for (const m of line.text.matchAll(re)) {
+    const from = line.from + m.index!
+    const to = from + m[0].length
+    if (pos >= from && pos <= to) return { from, to }
+  }
+  return null
+}
+
 function wikiLinkTargetAt(v: EditorView, pos: number): string | null {
   const line = v.state.doc.lineAt(pos)
   const re = /!?\[\[([^\[\]]+)\]\]/g
@@ -3928,6 +3951,7 @@ async function boot() {
 ;(window as any).__envy = {
   view,
   wikiLinkTargetAt,
+  wikiLinkRangeAt,
   // Lets the interlinks panel be exercised without a backend, so its layout
   // can be checked in a plain browser rather than by driving the real app.
   // Positioning and dismissal are layout behaviour, checkable in a plain
