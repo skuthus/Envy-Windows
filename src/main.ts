@@ -9,6 +9,8 @@ import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window'
 import {
   embedHost,
   envyStyler,
+  existingTitles,
+  isGhostLinkForTest,
   plainTextField,
   refreshEmbeds,
   searchQueryField,
@@ -122,6 +124,14 @@ function applyEditorKeymap() {
   })
 }
 
+// The existing note titles, lowercased, for the editor's ghost-link check — an
+// O(1) membership test rebuilt only when the titles change. Declared *above*
+// the editor because the styler reads it (through the existingTitles facet)
+// while building its first decorations during construction below; a `let` down
+// with the other known* lists would still be in its temporal dead zone then,
+// and the ReferenceError would take the whole styler plugin down with it.
+let knownTitlesLower = new Set<string>()
+
 const view = new EditorView({
   state: EditorState.create({
     doc: '',
@@ -140,6 +150,9 @@ const view = new EditorView({
       // so it tracks edits without the editor being reconfigured.
       editorCompletion,
       completionSources.of(() => ({ titles: knownTitles, tags: knownTags })),
+      // The set the styler checks a [[link]]'s target against to decide whether
+      // it's a ghost. A getter, so it reads the live set without reconfiguring.
+      existingTitles.of(() => knownTitlesLower),
       completionTransforms,
       autoPairing,
       searchQueryField,
@@ -2771,6 +2784,15 @@ let knownTags: string[] = []
 let knownFolders: string[] = []
 let knownTitles: string[] = []
 
+function updateKnownTitles(titles: string[]) {
+  knownTitles = titles
+  knownTitlesLower = new Set(titles.map((t) => t.toLowerCase()))
+  // Nothing in the open note's text changed, so nudge the styler to repaint —
+  // otherwise a link stays a ghost after its target is created (or keeps its
+  // resolved styling after the target is deleted) until the next keystroke.
+  view.dispatch({ effects: restyle.of(null) })
+}
+
 /// Which operators complete their argument as you type, and where each draws
 /// its suggestions from — matching the Mac's 1.8.4 autofill. `tag:`/`folder:`
 /// complete from your real lists; `link:`/`interlink:`/`title:` complete note
@@ -2800,11 +2822,16 @@ const COMPLETION_OPERATORS: Record<string, CompletionSpec> = {
 /// cheap (a tag/title projection, a shallow dir walk).
 async function refreshCompletionSources() {
   try {
-    ;[knownTags, knownFolders, knownTitles] = await Promise.all([
+    const [tags, folders, titles] = await Promise.all([
       invoke<string[]>('all_tags'),
       invoke<string[]>('list_subfolders'),
       invoke<string[]>('all_titles'),
     ])
+    knownTags = tags
+    knownFolders = folders
+    // Routes through the setter so the ghost-link title set and a restyle come
+    // along with the new titles.
+    updateKnownTitles(titles)
   } catch (err) {
     console.error('could not refresh autofill sources', err)
   }
@@ -3954,8 +3981,10 @@ async function boot() {
   setCompletionSourcesForTest: (tags: string[], folders: string[], titles: string[]) => {
     knownTags = tags
     knownFolders = folders
-    knownTitles = titles
+    // Through the setter so the ghost-link title set and a restyle come too.
+    updateKnownTitles(titles)
   },
+  isGhostLinkForTest,
   // The editor ghost completion, decided on the live editor state (no focus
   // needed, unlike the on-screen widget).
   editorGhostForTest: () => ghostRemainderForTest(view.state),

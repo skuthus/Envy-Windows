@@ -1478,6 +1478,10 @@ body.popover {
 .envy-link, .envy-wikilink { color: var(--envy-link); }
 .envy-wikilink { cursor: pointer; }
 .envy-link:hover, .envy-wikilink:hover { text-decoration: underline; }
+/* A ghost link: the same link colour at 0.45 alpha, so an unresolved target
+   reads as a dimmed promise. Only the colour differs from a live link — same
+   cursor, same hover underline. Matches the Mac's withAlphaComponent(0.45). */
+.envy-wikilink-ghost { color: color-mix(in srgb, var(--envy-link) 45%, transparent); }
 
 /* --- Tags ---------------------------------------------------------------- */
 .envy-tag {

@@ -32,6 +32,50 @@ export const allowEmbeds = Facet.define<boolean, boolean>({
   combine: (values) => values[0] ?? true,
 })
 
+/// The set of existing note titles, lowercased, so the styler can tell a
+/// `[[link]]` that resolves from a "ghost" one whose target doesn't exist yet.
+/// A getter returning a live set (like the completion sources), read fresh each
+/// styling pass so a ghost un-ghosts the moment its target is created — the
+/// styler just needs a `restyle` nudge when the set changes. Default resolves
+/// everything, so an editor given no set (an embed's inner editor) never paints
+/// a ghost.
+export const existingTitles = Facet.define<() => Set<string>, () => Set<string>>({
+  combine: (values) => values[0] ?? (() => new Set()),
+})
+
+/// Attachment extensions that count as resolvable on sight — a `[[pic.png]]`
+/// or `![[pic.png]]` is a kept promise, not an unfilled one, so it never
+/// ghosts. Mirrors envy-core's IMAGE_ATTACHMENT_EXTENSIONS.
+const IMAGE_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'heic', 'heif', 'tiff', 'tif', 'bmp',
+])
+
+function isImageTarget(target: string): boolean {
+  const dot = target.lastIndexOf('.')
+  return dot !== -1 && IMAGE_EXTENSIONS.has(target.slice(dot + 1).toLowerCase())
+}
+
+/// Whether a `[[link]]`'s target names something that exists — a note (case
+/// insensitively) or an image attachment. An empty title set is treated as
+/// "unknown, assume resolved" so a not-yet-loaded index (or an embed's inner
+/// editor, which is given no set) never flashes every link as a ghost.
+function titleResolves(target: string, titles: Set<string>): boolean {
+  if (titles.size === 0) return true
+  if (isImageTarget(target)) return true
+  return titles.has(target.toLowerCase())
+}
+
+/// Test-only: would a `[[body]]` render as a ghost, given these existing
+/// titles? Combines target extraction (alias/heading stripped), the image
+/// exemption, and the case-insensitive lookup — the same decision the styler
+/// makes per link. The inline styler is a ViewPlugin whose decorations only
+/// materialise in a composited editor, so its ghosting can't be seen in a
+/// headless pane; this exposes the decision so it can be.
+export function isGhostLinkForTest(body: string, titles: string[]): boolean {
+  const set = new Set(titles.map((t) => t.trim().toLowerCase()))
+  return !titleResolves(wikiLinkTarget(body), set)
+}
+
 /// The live search query, pushed in from the search box so matches can be
 /// highlighted in the open note. Held in editor state rather than a module
 /// variable so a query change goes through the normal update cycle and
@@ -407,6 +451,10 @@ const styles = {
   codeBlock: mark('envy-code-block'),
   link: mark('envy-link'),
   wikiLink: mark('envy-wikilink'),
+  /// A `[[link]]` whose target doesn't exist yet — the same link, dimmed, so a
+  /// glance separates kept promises from IOUs. Still clickable (click creates
+  /// the note), same as the Mac.
+  ghostLink: mark('envy-wikilink envy-wikilink-ghost'),
   tag: mark('envy-tag'),
   blockquote: mark('envy-blockquote'),
   blockquoteText: mark('envy-blockquote-text'),
@@ -568,6 +616,8 @@ function buildDecorations(view: EditorView): DecorationSet {
 
   const marks: Mark[] = []
   const doc = view.state.doc
+  // The existing-title set for the ghost-link check, read once per pass.
+  const titles = view.state.facet(existingTitles)()
 
   // Expand each visible range out to whole lines — the ^-anchored patterns are
   // wrong on a slice that starts mid-line, and CM6's visibleRanges make no
@@ -715,13 +765,21 @@ function buildDecorations(view: EditorView): DecorationSet {
       [P.strikethrough, styles.strikethrough, 2],
     ]
     const claimed: Array<[number, number]> = []
-    for (const [re, deco, markerLen] of inline) {
+    for (const [re, baseDeco, markerLen] of inline) {
       for (const m of text.matchAll(re)) {
         const s = base + m.index!
         const e = s + m[0].length
         if (insideCode(s, e)) continue
         if (claimed.some(([x, y]) => s < y && e > x)) continue
         claimed.push([s, e])
+        // A `[[link]]` or `![[embed]]` whose target doesn't exist yet is
+        // dimmed. m[1] is the body; the marker hides/reveals still land on the
+        // brackets, so only the body carries the ghost colour — as on the Mac.
+        const deco =
+          (re === P.wikiLink || re === P.embed) &&
+          !titleResolves(wikiLinkTarget(m[1]), titles)
+            ? styles.ghostLink
+            : baseDeco
         marks.push({ from: s, to: e, deco })
         if (!selectionTouches(view, s, e)) {
           marks.push({ from: s, to: s + markerLen, deco: hidden })
