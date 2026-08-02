@@ -1456,6 +1456,8 @@ body.popover {
    Never removed from the document, only dimmed or replaced — the file on disk
    is always exactly what you typed. */
 .envy-marker { color: var(--envy-marker); }
+/* List markers, dimmed so the item text leads; the `*`→• glyph shares the tint. */
+.envy-list-marker, .envy-list-bullet { color: var(--envy-marker); }
 
 /* --- Headings ------------------------------------------------------------ */
 .envy-h1 { font-size: 1.7em; font-weight: 700; }

@@ -30,6 +30,7 @@ import {
   toggleDueToken,
 } from './input'
 import { editorCompletion, completionSources, ghostRemainderForTest } from './completion'
+import { listEditing, listContinuation, isListLine, renumberEdits } from './lists'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 import { createMiniNoteEditor, type MiniNoteEditor } from './mininote'
 import { renderReference, type ReferenceTab } from './reference'
@@ -143,6 +144,9 @@ const view = new EditorView({
       // for those chords. In a compartment because the bindings are
       // remappable, and a facet can't be changed after the fact.
       emphasisKeys.of(keymap.of(emphasisKeymap(bindingFor('bold'), bindingFor('italic')))),
+      // Enter/Tab/Shift-Tab continue and nest lists (and ordered lists
+      // renumber) — Prec.high inside, so this beats the default newline/indent.
+      listEditing,
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
       // Ghost-text completion for [[links]] and #tags, drawing from the same
@@ -4136,6 +4140,9 @@ async function boot() {
   headingSlug,
   headingRangeForSlug,
   footnoteDefinitionRange,
+  listContinuation,
+  isListLine,
+  renumberForTest: () => renumberEdits(view.state),
   // Lets the interlinks panel be exercised without a backend, so its layout
   // can be checked in a plain browser rather than by driving the real app.
   // Positioning and dismissal are layout behaviour, checkable in a plain

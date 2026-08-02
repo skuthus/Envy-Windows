@@ -187,6 +187,23 @@ const P = {
   checkedTaskLine: /^\s*(?:[-*+][ \t]+)?\[[xX]\][ \t]+.*$/gm,
 }
 
+/// Shows a `*` bullet as an actual `•` glyph — the displayed character only;
+/// the file still holds `*`, and the cursor/backspace still see it, since the
+/// widget is revealed back to `*` whenever the caret is on it. Mirrors the
+/// Mac's glyph substitution for `*`.
+class BulletWidget extends WidgetType {
+  eq() {
+    return true
+  }
+  toDOM() {
+    const span = document.createElement('span')
+    span.className = 'envy-list-bullet'
+    span.textContent = '•'
+    return span
+  }
+}
+const bulletWidget = Decoration.replace({ widget: new BulletWidget() })
+
 class CheckboxWidget extends WidgetType {
   constructor(readonly checked: boolean, readonly pos: number) {
     super()
@@ -462,6 +479,8 @@ const styles = {
   /// A footnote *reference* `[^1]` — the label rendered as a small raised
   /// superscript in the link colour, with the `[^`/`]` hidden, matching the Mac.
   footnoteRef: mark('envy-footnote-ref'),
+  /// A list marker (`-`/`+`/`*` or `1.`) dimmed so the content reads first.
+  listMarker: mark('envy-list-marker'),
   completedTask: mark('envy-completed-task'),
   marker: mark('envy-marker'),
   hr: mark('envy-hr'),
@@ -884,6 +903,26 @@ function buildDecorations(view: EditorView): DecorationSet {
         marks.push({ from: s, to: labelFrom, deco: styles.marker })
         marks.push({ from: labelTo, to: e, deco: styles.marker })
       }
+    }
+
+    // List markers: dim the bullet/number so the content leads, and show a `*`
+    // as a `•` glyph. The marker char on disk is untouched; the `*` reveals
+    // back when the caret is on it. Mirrors the Mac's listMarkerColor + glyph.
+    for (const m of text.matchAll(P.unorderedList)) {
+      const ms = base + m.index! + m[1].length
+      const me = ms + 1
+      if (insideCode(ms, me)) continue
+      if (m[2] === '*' && !selectionTouches(view, ms, me)) {
+        marks.push({ from: ms, to: me, deco: bulletWidget })
+      } else {
+        marks.push({ from: ms, to: me, deco: styles.listMarker })
+      }
+    }
+    for (const m of text.matchAll(P.orderedList)) {
+      const ms = base + m.index! + m[1].length
+      const me = ms + m[2].length
+      if (insideCode(ms, me)) continue
+      marks.push({ from: ms, to: me, deco: styles.listMarker })
     }
 
     for (const m of text.matchAll(P.hashtag)) {
