@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "envy-windows"
-version = "1.8.0-beta"
+version = "1.8.1-beta"
 dependencies = [
  "chrono",
  "dirs 5.0.1",

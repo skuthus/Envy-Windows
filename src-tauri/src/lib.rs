@@ -1364,11 +1364,17 @@ fn launch_installer_after_exit(bytes: &[u8], version: &str) -> std::io::Result<(
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        // Detached so it outlives this process, and windowless so the wait
-        // doesn't flash a console over whatever the user is doing.
+        // CREATE_NO_WINDOW only — and *not* DETACHED_PROCESS. A detached cmd has
+        // no console to inherit, so it allocates its own — a real, visible one.
+        // That window could be clicked into QuickEdit "select" mode, which halts
+        // the console mid-`ping`, so the installer after the `&` never ran (the
+        // update just sat on a frozen "Select ping…" window). CREATE_NO_WINDOW
+        // gives cmd a hidden console instead: nothing to show, nothing to click,
+        // nothing to freeze. A child process outlives its parent regardless, so
+        // dropping DETACHED_PROCESS costs nothing — the installer still runs
+        // after this app exits.
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-        const DETACHED_PROCESS: u32 = 0x0000_0008;
-        command.creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS);
+        command.creation_flags(CREATE_NO_WINDOW);
     }
     command.spawn()?;
     Ok(())
