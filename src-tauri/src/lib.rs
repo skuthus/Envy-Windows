@@ -1604,7 +1604,7 @@ fn toggle_pinned_window(app: &tauri::AppHandle) {
 /// never loads). Async runs this on a worker thread, so `run_on_main_thread`
 /// genuinely hands the build to the free loop instead of running it inline.
 #[tauri::command]
-async fn pop_out_note(id: String, title: String, app: tauri::AppHandle) {
+async fn pop_out_note(id: String, app: tauri::AppHandle) {
     use std::hash::{Hash, Hasher};
 
     enum Action {
@@ -1648,7 +1648,9 @@ async fn pop_out_note(id: String, title: String, app: tauri::AppHandle) {
                     &label,
                     tauri::WebviewUrl::App("popout.html".into()),
                 )
-                .title(&title)
+                // Blank native title: the note's name lives in the window's own
+                // editable title strip, not doubled in the OS title bar.
+                .title("")
                 .inner_size(440.0, 480.0)
                 .position(140.0 + step, 120.0 + step)
                 .min_inner_size(240.0, 160.0)

@@ -784,6 +784,26 @@ body.popout-window {
   background: var(--envy-background);
 }
 #popout-editor { flex: 1; min-height: 0; overflow: hidden; padding: 4px 10px; }
+/* The pop-out's editable title — click it to rename the note, the same as the
+   main window's title bar. */
+#popout-title {
+  flex: none;
+  font: inherit;
+  font-weight: 600;
+  font-size: calc(15px * var(--envy-ui-scale, 1));
+  margin: 8px 10px 2px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--envy-text);
+  text-overflow: ellipsis;
+}
+#popout-title:focus {
+  outline: none;
+  border-color: color-mix(in srgb, var(--envy-marker) 55%, transparent);
+  background: var(--envy-background);
+}
 
 /* --- Footer and interlinks --------------------------------------------------
    The panel sits directly above the footer bar so expanding grows it upward

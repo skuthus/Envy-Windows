@@ -11,6 +11,7 @@ import { EditorView, keymap, drawSelection } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { invoke } from '@tauri-apps/api/core'
+import { emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { envyStyler } from './styler'
 import { listEditing } from './lists'
@@ -29,7 +30,9 @@ interface NoteDto {
 }
 
 const editorEl = document.getElementById('popout-editor')!
+const titleEl = document.getElementById('popout-title') as HTMLInputElement
 let noteId: string | null = null
+let noteTitle = ''
 let savedContent = ''
 let saveTimer: number | undefined
 // Shared with the main window through the common origin's localStorage; default
@@ -123,8 +126,9 @@ async function load() {
     const note = await invoke<NoteDto | null>('read_note', { id })
     if (!note) return
     noteId = note.id
+    noteTitle = note.title
     savedContent = note.content ?? ''
-    document.title = note.title
+    titleEl.value = note.title
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: savedContent },
       selection: { anchor: 0 },
@@ -133,6 +137,48 @@ async function load() {
     console.error('could not load the popped-out note', e)
   }
 }
+
+/// Renames the note from the title field — a real rename, so every `[[link]]`
+/// pointing at it is rewritten across the Index, exactly as the main window's
+/// title bar does. The file's path is its id, so the id changes with it; the
+/// main window is nudged to rescan since Envy's own writes are hidden from the
+/// watcher.
+async function commitRename() {
+  if (!noteId) return
+  const next = titleEl.value.trim()
+  if (!next || next === noteTitle) {
+    titleEl.value = noteTitle
+    return
+  }
+  try {
+    const renamed = await invoke<NoteDto>('rename_note', { id: noteId, title: next })
+    noteId = renamed.id
+    // The sanitizer may have altered what was typed (a filename Windows can't
+    // represent), so show what actually landed on disk.
+    noteTitle = renamed.title
+    titleEl.value = renamed.title
+    await emit('index-changed')
+  } catch (e) {
+    console.error('pop-out rename failed', e)
+    titleEl.value = noteTitle
+  }
+}
+
+// Enter commits and returns focus to the editor; blur commits too. Escape here
+// reverts, matching the main window's title field.
+titleEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    void commitRename().then(() => view.focus())
+  } else if (e.key === 'Escape') {
+    // Revert, and don't let the window's Escape-to-close fire.
+    e.preventDefault()
+    e.stopPropagation()
+    titleEl.value = noteTitle
+    view.focus()
+  }
+})
+titleEl.addEventListener('blur', () => void commitRename())
 
 async function flush() {
   window.clearTimeout(saveTimer)

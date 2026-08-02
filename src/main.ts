@@ -2663,7 +2663,7 @@ function noteMenuItems(note: NoteDto): MenuItemSpec[] {
     },
     {
       label: 'Pop Out',
-      run: () => void invoke('pop_out_note', { id: note.id, title: note.title }),
+      run: () => void invoke('pop_out_note', { id: note.id }),
     },
     {
       label: 'Rename',
