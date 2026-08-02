@@ -855,8 +855,17 @@ fn reveal_index(state: State<AppState>) -> Result<(), String> {
 /// `explorer /select,<path>` returns a non-zero exit code even when it works,
 /// which is long-standing Windows behaviour rather than a failure, so the
 /// status is deliberately not checked.
+///
+/// The command line is built with `raw_arg`, not `arg`, on purpose. `arg`
+/// quotes any value containing a space, which for a vault like
+/// `D:\Documents\Envy Benchmark\Note.md` yields `explorer "/select,D:\…\Note.md"`
+/// — the whole switch wrapped in one pair of quotes. Explorer can't parse that
+/// and silently opens the user's Documents folder instead of selecting the
+/// file. The form it actually wants is `/select,"<path>"`: the switch bare, only
+/// the path quoted. `raw_arg` appends exactly that, byte for byte.
 #[tauri::command]
 fn reveal_note(id: String, state: State<AppState>) -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
     let path = {
         let store = state.store.lock().unwrap();
         // Trash is searched too: "Reveal in Explorer" is offered on trashed
@@ -870,7 +879,7 @@ fn reveal_note(id: String, state: State<AppState>) -> Result<(), String> {
             .ok_or_else(|| format!("no note with id {id}"))?
     };
     std::process::Command::new("explorer")
-        .arg(format!("/select,{}", path.display()))
+        .raw_arg(format!("/select,\"{}\"", path.display()))
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
