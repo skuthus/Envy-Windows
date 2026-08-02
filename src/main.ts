@@ -12,6 +12,7 @@ import {
   envyStyler,
   existingTitles,
   isImageTarget,
+  buildImageMarker,
   isGhostLinkForTest,
   plainTextField,
   refreshEmbeds,
@@ -185,6 +186,34 @@ const view = new EditorView({
         readAttachment: (name) =>
           invoke<ArrayBuffer>('read_attachment', { name }).catch(() => null),
         openAttachment: (name) => void invoke('open_attachment', { name }),
+        onImageContextMenu: (raw, spec, x, y) => {
+          // Presets set the width and drop any explicit height, matching the
+          // Mac; the caption rides along untouched. "Original size" clears the
+          // size token entirely.
+          const resize = (width: number | undefined) =>
+            rewriteEmbedMarker(raw, buildImageMarker({ name: spec.name, width, caption: spec.caption }))
+          openContextMenu(x, y, [
+            { label: 'Small (240)', run: () => resize(240) },
+            { label: 'Medium (400)', run: () => resize(400) },
+            { label: 'Large (640)', run: () => resize(640) },
+            { label: 'Original size', run: () => resize(undefined) },
+            { label: '', separator: true },
+            {
+              label: 'Custom width…',
+              run: async () => {
+                const input = await textPrompt(
+                  'Image width in pixels:',
+                  spec.width ? String(spec.width) : '',
+                )
+                if (input === null) return
+                const w = Math.round(Number(input))
+                if (Number.isFinite(w) && w > 0) resize(w)
+              },
+            },
+            { label: '', separator: true },
+            { label: 'Open image', run: () => void invoke('open_attachment', { name: spec.name }) },
+          ])
+        },
       }),
       envyStyler,
       EditorView.domEventHandlers({
@@ -195,6 +224,14 @@ const view = new EditorView({
           // edit it — the two gestures would otherwise fight.
           // Turning the setting off trades that away for a plain click.
           if (event.button !== 0) return false
+          // A click inside a rendered embed belongs to the widget — the image's
+          // own open/menu handlers, or a note embed's inner editor — never to a
+          // marker follow. Without this, clicking the empty space beside an
+          // image snaps to the marker line and "opens" the file, which for a
+          // missing one throws an OS "cannot find" error.
+          if ((event.target as HTMLElement | null)?.closest('.envy-image-embed, .envy-embed')) {
+            return false
+          }
           const pos = v.posAtCoords({ x: event.clientX, y: event.clientY })
           if (pos === null) return false
 
@@ -250,13 +287,22 @@ const view = new EditorView({
           if (settings.requireModifierForLinkClick && !event.ctrlKey) return false
           const target = wikiLinkTargetAt(v, pos)
           if (!target) return false
+          const range = wikiLinkRangeAt(v, pos)
+          // A collapsed `![[image]]` or `[[link]]` can fill its whole line, so a
+          // click in the empty space past it snaps to the line end — which
+          // posAtCoords reports as inside the marker. Guard on the pointer's real
+          // x: past the rendered end of the marker, place the caret rather than
+          // follow (and, for a missing image, throw an OS error).
+          if (range) {
+            const edge = v.coordsAtPos(range.to, -1)
+            if (edge && event.clientX > edge.right + 2) return false
+          }
           // With plain click-to-follow on, a click inside the link the caret
           // already sits in is an edit, not a navigation — otherwise a note
           // that is only a link (or repositioning within any link you've
           // entered) could never be clicked into. Ctrl still follows,
           // unconditionally. Mirrors the Mac's caretIsInsideWikiLink carve-out.
           if (!event.ctrlKey) {
-            const range = wikiLinkRangeAt(v, pos)
             const caret = v.state.selection.main.from
             if (range && caret >= range.from && caret <= range.to) return false
           }
@@ -590,6 +636,16 @@ function insertImageReference(name: string, v: EditorView) {
     selection: { anchor: sel.from + insertion.length },
   })
   v.focus()
+}
+
+/// Replaces the first exact occurrence of an `![[…]]` marker with a rewritten
+/// one — how the size menu changes an image's width. Keyed on the full marker
+/// text rather than a stored position, so it stays correct after edits above it.
+function rewriteEmbedMarker(oldText: string, newText: string) {
+  if (oldText === newText) return
+  const at = view.state.doc.toString().indexOf(oldText)
+  if (at === -1) return
+  view.dispatch({ changes: { from: at, to: at + oldText.length, insert: newText } })
 }
 
 /// Saves a pasted image blob to Attachments/ and drops in its reference. The

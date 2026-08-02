@@ -23,6 +23,9 @@ export interface EmbedHost {
   readAttachment(name: string): Promise<ArrayBuffer | null>
   /// Opens an attachment in the system default app — clicking the image.
   openAttachment(name: string): void
+  /// Right-clicking an inline image: the app shows the size menu and rewrites
+  /// the marker. `raw` is the exact `![[…]]` text so the right one is replaced.
+  onImageContextMenu(raw: string, spec: ImageEmbedSpec, x: number, y: number): void
 }
 
 export const embedHost = Facet.define<EmbedHost, EmbedHost | null>({
@@ -58,6 +61,44 @@ const IMAGE_EXTENSIONS = new Set([
 export function isImageTarget(target: string): boolean {
   const dot = target.lastIndexOf('.')
   return dot !== -1 && IMAGE_EXTENSIONS.has(target.slice(dot + 1).toLowerCase())
+}
+
+/// A parsed image embed. `![[name|400]]`, `![[name|400x300]]`,
+/// `![[name|400|caption]]`, and `![[name|caption]]` all decompose here.
+export interface ImageEmbedSpec {
+  name: string
+  width?: number
+  height?: number
+  caption?: string
+}
+
+/// Splits an embed body into name / size / caption, matching the Mac's
+/// `imageEmbedRanges`: the segment right after the name is a size only when it's
+/// `<digits>` or `<digits>x<digits>`; whatever remains is the caption.
+export function parseImageEmbed(inner: string): ImageEmbedSpec {
+  const parts = inner.split('|').map((p) => p.trim())
+  const spec: ImageEmbedSpec = { name: parts[0] }
+  let rest = parts.slice(1)
+  const size = rest[0] ? /^(\d+)(?:x(\d+))?$/.exec(rest[0]) : null
+  if (size) {
+    spec.width = Number(size[1])
+    if (size[2]) spec.height = Number(size[2])
+    rest = rest.slice(1)
+  }
+  const caption = rest.join('|').trim()
+  if (caption) spec.caption = caption
+  return spec
+}
+
+/// Rebuilds the `![[…]]` marker from a spec — the inverse of `parseImageEmbed`,
+/// the twin of the Mac's `imageInner`. Used when the size menu rewrites the size.
+export function buildImageMarker(spec: ImageEmbedSpec): string {
+  const parts = [spec.name]
+  if (spec.width !== undefined) {
+    parts.push(spec.height !== undefined ? `${spec.width}x${spec.height}` : String(spec.width))
+  }
+  if (spec.caption) parts.push(spec.caption)
+  return `![[${parts.join('|')}]]`
 }
 
 /// Whether a `[[link]]`'s target names something that exists — a note (case
@@ -270,21 +311,27 @@ class ImageEmbedWidget extends WidgetType {
   private alive = true
 
   constructor(
-    readonly name: string,
+    readonly spec: ImageEmbedSpec,
+    readonly raw: string,
     readonly host: EmbedHost | null,
   ) {
     super()
   }
 
-  /// Same name → same image, so CodeMirror reuses the DOM (and the decoded
-  /// picture) across edits elsewhere in the note rather than reloading it.
-  eq(other: ImageEmbedWidget) {
-    return other.name === this.name
+  private get name() {
+    return this.spec.name
   }
 
-  /// The click-to-open handler is the widget's own; without this the outer
-  /// editor would treat a click on the image as a click on opaque space and
-  /// move its caret instead.
+  /// Same marker text → same rendered picture (name, size and caption all live
+  /// in `raw`), so CodeMirror reuses the DOM and the decoded image across edits
+  /// elsewhere; a size or caption change rebuilds it.
+  eq(other: ImageEmbedWidget) {
+    return other.raw === this.raw
+  }
+
+  /// The click and context-menu handlers are the widget's own; without this the
+  /// outer editor would treat a click on the image as a click on opaque space
+  /// and move its caret instead.
   ignoreEvent() {
     return true
   }
@@ -295,10 +342,29 @@ class ImageEmbedWidget extends WidgetType {
     const img = document.createElement('img')
     img.alt = this.name
     img.draggable = false
-    // Clicking the picture opens it in the default app, the same as clicking the
-    // filename text — the Mac hands the image to Preview either way.
-    img.addEventListener('click', () => this.host?.openAttachment(this.name))
+    // An explicit width/height caps the picture; max-width:100% (in CSS) still
+    // holds it inside the text column, matching the Mac's min(width, column).
+    if (this.spec.width !== undefined) img.style.width = `${this.spec.width}px`
+    if (this.spec.height !== undefined) img.style.height = `${this.spec.height}px`
+    // Double-click opens the picture in the default app. A single click does
+    // nothing — otherwise clicking around the document keeps popping images open
+    // in the background. (The right-click menu and Ctrl+clicking the filename
+    // text are the other ways in.)
+    img.addEventListener('dblclick', () => this.host?.openAttachment(this.name))
+    // Right-click offers the size presets, delegated to the app (which owns the
+    // menu and the document rewrite).
+    wrap.addEventListener('contextmenu', (e) => {
+      if (!this.host) return
+      e.preventDefault()
+      this.host.onImageContextMenu(this.raw, this.spec, e.clientX, e.clientY)
+    })
     wrap.append(img)
+    if (this.spec.caption) {
+      const caption = document.createElement('div')
+      caption.className = 'envy-image-caption'
+      caption.textContent = this.spec.caption
+      wrap.append(caption)
+    }
     void this.load(img, wrap)
     return wrap
   }
@@ -927,6 +993,16 @@ function buildDecorations(view: EditorView): DecorationSet {
               marks.push({ from: s + markerLen, to: s + markerLen + pipe + 1, deco: hidden })
             }
           }
+          // An image embed shows just its filename: hide the `|width|caption`
+          // suffix so `![[photo.png|400]]` reads as "photo.png", the size and
+          // caption living on the rendered picture below. Matches the Mac
+          // collapsing the size token.
+          if (re === P.embed && isImageTarget(wikiLinkTarget(m[1]))) {
+            const pipe = m[1].indexOf('|')
+            if (pipe !== -1) {
+              marks.push({ from: s + markerLen + pipe, to: e - 2, deco: hidden })
+            }
+          }
         } else {
           marks.push({ from: s, to: s + markerLen, deco: styles.marker })
           marks.push({ from: e - (markerLen === 3 && re === P.embed ? 2 : markerLen), to: e, deco: styles.marker })
@@ -1128,7 +1204,7 @@ function buildEmbedDecorations(state: EditorState): DecorationSet {
     // else is a note transclusion. The single `isImageTarget` split keeps this
     // in step with envy-core's is_image_attachment.
     const widget = isImageTarget(title)
-      ? new ImageEmbedWidget(title, host)
+      ? new ImageEmbedWidget(parseImageEmbed(m[1]), m[0], host)
       : new EmbedWidget(title, host, hostNoteId)
     ranges.push(Decoration.widget({ widget, block: true, side: 1 }).range(line.to))
   }

@@ -1666,6 +1666,13 @@ body.popout-window {
   border-radius: 6px;
   cursor: pointer;
 }
+/* A caption sits under the picture, quiet and centred to the image's width. */
+.envy-image-caption {
+  margin-top: 4px;
+  font-size: 12px;
+  font-style: italic;
+  color: var(--envy-blockquote);
+}
 /* A reference whose file is gone renders as a dashed placeholder rather than a
    broken-image glyph, matching the Mac. */
 .envy-image-embed-missing {
