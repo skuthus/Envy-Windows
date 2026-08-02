@@ -15,6 +15,10 @@ import { emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { envyStyler, embedHost, isImageTarget } from './styler'
 import { makeEmbedHost } from './embed-host'
+import { openImageMenu, renameAttachmentFlow, insertImageReference } from './image-menu'
+import { openImagePicker } from './image-picker'
+import { openContextMenu } from './context-menu'
+import { setPromptFocusReturn } from './prompt-modal'
 import { listEditing } from './lists'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 
@@ -66,8 +70,13 @@ const view = new EditorView({
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
       // Resolves `![[note]]` transclusions and `![[image.png]]` attachments, so
-      // a popped note renders images (and embeds) exactly as the main window.
-      embedHost.of(makeEmbedHost(() => noteId)),
+      // a popped note renders images (and embeds) exactly as the main window —
+      // including the image's right-click size/rename/reveal menu.
+      embedHost.of({
+        ...makeEmbedHost(() => noteId),
+        onImageContextMenu: (raw, spec, x, y) =>
+          openImageMenu(raw, spec, x, y, view, (name) => void renamePoppedImage(name)),
+      }),
       envyStyler,
       EditorView.domEventHandlers({
         mousedown: (event, v) => {
@@ -198,6 +207,37 @@ async function flush() {
   window.clearTimeout(saveTimer)
   await save()
 }
+
+/// Renames the attachment behind a right-clicked image. The shared flow rewrites
+/// references vault-wide in Rust; here we flush this float's buffer first, then
+/// nudge the main window to rescan and reload our own note with the new name.
+function renamePoppedImage(oldName: string) {
+  return renameAttachmentFlow(oldName, {
+    flush,
+    reload: async () => {
+      await emit('index-changed')
+      await load()
+    },
+  })
+}
+
+// A dialog (rename / custom width) hands focus back to the editor in this float.
+setPromptFocusReturn(() => view.focus())
+
+// The editor's own right-click menu — just "Insert Image…" for now, the same as
+// the main window. An image widget runs its own menu, so leave those clicks be.
+editorEl.addEventListener('contextmenu', (e) => {
+  if ((e.target as HTMLElement).closest('.envy-image-embed')) return
+  if (!noteId) return
+  e.preventDefault()
+  e.stopPropagation()
+  openContextMenu(e.clientX, e.clientY, [
+    {
+      label: 'Insert Image…',
+      run: () => void openImagePicker((name) => insertImageReference(name, view)),
+    },
+  ])
+})
 
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)')
 function syncTheme() {

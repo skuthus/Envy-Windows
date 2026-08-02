@@ -7,12 +7,15 @@ import { open as openFolderPicker } from '@tauri-apps/plugin-dialog'
 import { getVersion } from '@tauri-apps/api/app'
 import { getAllWindows, getCurrentWindow } from '@tauri-apps/api/window'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { openContextMenu, type MenuItemSpec } from './context-menu'
+import { textPrompt, confirmModal, alertModal, setPromptFocusReturn, isDialogOpen } from './prompt-modal'
+import { openImageMenu, renameAttachmentFlow, insertImageReference } from './image-menu'
+import { openImagePicker } from './image-picker'
 import {
   embedHost,
   envyStyler,
   existingTitles,
   isImageTarget,
-  buildImageMarker,
   isGhostLinkForTest,
   plainTextField,
   refreshEmbeds,
@@ -84,6 +87,9 @@ interface NoteDto {
 }
 
 const searchInput = document.getElementById('search') as HTMLInputElement
+// A dialog closing hands focus back to the search box in this window — the same
+// place every other overlay returns to, so the keyboard never ends up stranded.
+setPromptFocusReturn(() => searchInput.focus())
 const panesEl = document.getElementById('panes')!
 const dividerEl = document.getElementById('divider')!
 /// The split sizes the *pane* (header + scrolling list), not the list itself —
@@ -186,39 +192,8 @@ const view = new EditorView({
         readAttachment: (name) =>
           invoke<ArrayBuffer>('read_attachment', { name }).catch(() => null),
         openAttachment: (name) => void invoke('open_attachment', { name }),
-        onImageContextMenu: (raw, spec, x, y) => {
-          // Presets set the width and drop any explicit height, matching the
-          // Mac; the caption rides along untouched. "Original size" clears the
-          // size token entirely.
-          const resize = (width: number | undefined) =>
-            rewriteEmbedMarker(raw, buildImageMarker({ name: spec.name, width, caption: spec.caption }))
-          openContextMenu(x, y, [
-            { label: 'Small (240)', run: () => resize(240) },
-            { label: 'Medium (400)', run: () => resize(400) },
-            { label: 'Large (640)', run: () => resize(640) },
-            { label: 'Original size', run: () => resize(undefined) },
-            { label: '', separator: true },
-            {
-              label: 'Custom width…',
-              run: async () => {
-                const input = await textPrompt(
-                  'Image width in pixels:',
-                  spec.width ? String(spec.width) : '',
-                )
-                if (input === null) return
-                const w = Math.round(Number(input))
-                if (Number.isFinite(w) && w > 0) resize(w)
-              },
-            },
-            { label: '', separator: true },
-            { label: 'Open image', run: () => void invoke('open_attachment', { name: spec.name }) },
-            { label: 'Rename…', run: () => void renameAttachment(spec.name) },
-            {
-              label: 'Reveal in Explorer',
-              run: () => void invoke('reveal_attachment', { name: spec.name }),
-            },
-          ])
-        },
+        onImageContextMenu: (raw, spec, x, y) =>
+          openImageMenu(raw, spec, x, y, view, (name) => void renameAttachment(name)),
       }),
       envyStyler,
       EditorView.domEventHandlers({
@@ -629,30 +604,6 @@ async function followLink(target: string) {
 // folder and inserts an `![[filename]]` embed the styler renders inline. Mirrors
 // the Mac's paste/drop handlers in MarkdownTextView.
 
-/// Inserts `![[name]]` on its own line at the selection, with a leading break if
-/// we're mid-line and a trailing blank line — the same shape the Mac's
-/// `insertImageReference` uses (the blank line is where the picture sits).
-function insertImageReference(name: string, v: EditorView) {
-  const sel = v.state.selection.main
-  const atLineStart = sel.from === 0 || v.state.doc.sliceString(sel.from - 1, sel.from) === '\n'
-  const insertion = `${atLineStart ? '' : '\n'}![[${name}]]\n\n`
-  v.dispatch({
-    changes: { from: sel.from, to: sel.to, insert: insertion },
-    selection: { anchor: sel.from + insertion.length },
-  })
-  v.focus()
-}
-
-/// Replaces the first exact occurrence of an `![[…]]` marker with a rewritten
-/// one — how the size menu changes an image's width. Keyed on the full marker
-/// text rather than a stored position, so it stays correct after edits above it.
-function rewriteEmbedMarker(oldText: string, newText: string) {
-  if (oldText === newText) return
-  const at = view.state.doc.toString().indexOf(oldText)
-  if (at === -1) return
-  view.dispatch({ changes: { from: at, to: at + oldText.length, insert: newText } })
-}
-
 /// Pulls the open note's text back from disk when it changed underneath the
 /// buffer — a transclusion source edited elsewhere, an attachment renamed (which
 /// rewrites references), the watcher firing. Skipped while unsaved keystrokes
@@ -674,137 +625,23 @@ async function reloadOpenNoteFromDisk() {
   flashChangedRange(changed)
 }
 
-/// Renames an attachment from the image's right-click menu. The rewrite of every
-/// `![[…]]` reference happens in Rust; the open note is flushed first (so its
-/// references are on disk to rewrite) and reloaded after (so its buffer shows
-/// the new name rather than the old one it would otherwise save back).
-async function renameAttachment(oldName: string) {
-  const input = await textPrompt('Rename image to:', oldName)
-  if (input === null) return
-  let next = input.trim()
-  if (!next || next === oldName) return
-  // Keep the extension if the user dropped it, so the reference stays an image.
-  if (!next.includes('.')) {
-    const dot = oldName.lastIndexOf('.')
-    if (dot !== -1) next += oldName.slice(dot)
-  }
-  cancelPendingSave()
-  await save()
-  try {
-    await invoke<string>('rename_attachment', { oldName, newName: next })
-  } catch (e) {
-    await alertModal(typeof e === 'string' ? e : 'Could not rename the image.')
-    return
-  }
-  await runSearch()
-  refreshEmbeds()
-  await reloadOpenNoteFromDisk()
+/// Renames an attachment from the image's right-click menu. The shared flow does
+/// the prompt and the Rust call; the hooks are this window's own — flush the open
+/// buffer so its references are on disk to rewrite, then refresh everything so it
+/// shows the new name rather than saving the old one back.
+function renameAttachment(oldName: string) {
+  return renameAttachmentFlow(oldName, {
+    flush: async () => {
+      cancelPendingSave()
+      await save()
+    },
+    reload: async () => {
+      await runSearch()
+      refreshEmbeds()
+      await reloadOpenNoteFromDisk()
+    },
+  })
 }
-
-// --- Insert Image picker -----------------------------------------------------
-// A grid of every image already in the vault, so one can be re-inserted by sight
-// rather than by remembering a name like "Pasted image 3.png". Mirrors the Mac's
-// ImageAttachmentPicker (⇧⌘I / right-click → Insert Image…).
-const imagePickerEl = document.getElementById('image-picker')!
-const imagePickerFilterEl = document.getElementById('image-picker-filter') as HTMLInputElement
-const imagePickerGridEl = document.getElementById('image-picker-grid')!
-const imagePickerEmptyEl = document.getElementById('image-picker-empty')!
-let imagePickerNames: string[] = []
-let imagePickerUrls: string[] = []
-// Filtering rebuilds the grid; a bumped generation makes a slow thumbnail load
-// from a superseded build (or after close) drop its result instead of leaking.
-let imagePickerGen = 0
-
-async function openImagePicker() {
-  if (!openNoteId && !openTemplatePath) return
-  imagePickerNames = await invoke<string[]>('list_image_attachments')
-  imagePickerFilterEl.value = ''
-  buildImagePickerGrid('')
-  imagePickerEl.classList.remove('hidden')
-  imagePickerFilterEl.focus()
-}
-
-function closeImagePicker() {
-  if (imagePickerEl.classList.contains('hidden')) return
-  imagePickerGen++
-  imagePickerEl.classList.add('hidden')
-  imagePickerGridEl.replaceChildren()
-  for (const url of imagePickerUrls) URL.revokeObjectURL(url)
-  imagePickerUrls = []
-  view.focus()
-}
-
-function imagePickerMatches(filter: string): string[] {
-  const needle = filter.trim().toLowerCase()
-  return needle ? imagePickerNames.filter((n) => n.toLowerCase().includes(needle)) : imagePickerNames
-}
-
-function buildImagePickerGrid(filter: string) {
-  const gen = ++imagePickerGen
-  for (const url of imagePickerUrls) URL.revokeObjectURL(url)
-  imagePickerUrls = []
-  imagePickerGridEl.replaceChildren()
-  const matches = imagePickerMatches(filter)
-  if (matches.length === 0) {
-    imagePickerEmptyEl.textContent =
-      imagePickerNames.length === 0
-        ? 'No images yet. Drag or paste a picture into a note first.'
-        : 'No matches.'
-    imagePickerEmptyEl.classList.remove('hidden')
-    return
-  }
-  imagePickerEmptyEl.classList.add('hidden')
-  for (const name of matches) {
-    const cell = document.createElement('button')
-    cell.type = 'button'
-    cell.className = 'image-picker-cell'
-    const thumb = document.createElement('div')
-    thumb.className = 'thumb'
-    const img = document.createElement('img')
-    img.alt = name
-    img.loading = 'lazy'
-    thumb.append(img)
-    const label = document.createElement('div')
-    label.className = 'name'
-    label.textContent = name
-    cell.append(thumb, label)
-    cell.addEventListener('click', () => pickImage(name))
-    imagePickerGridEl.append(cell)
-    void invoke<ArrayBuffer>('read_attachment', { name })
-      .then((bytes) => {
-        if (gen !== imagePickerGen) return // superseded build or closed
-        const url = URL.createObjectURL(new Blob([bytes]))
-        imagePickerUrls.push(url)
-        img.src = url
-      })
-      .catch(() => {
-        /* a missing file just shows an empty thumb */
-      })
-  }
-}
-
-function pickImage(name: string) {
-  closeImagePicker()
-  insertImageReference(name, view)
-}
-
-imagePickerFilterEl.addEventListener('input', () => buildImagePickerGrid(imagePickerFilterEl.value))
-imagePickerFilterEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    // Return inserts the first match — the quick path when you half-remember the
-    // name; otherwise click a thumbnail.
-    e.preventDefault()
-    const first = imagePickerMatches(imagePickerFilterEl.value)[0]
-    if (first) pickImage(first)
-  } else if (e.key === 'Escape') {
-    e.preventDefault()
-    e.stopPropagation()
-    closeImagePicker()
-  }
-})
-imagePickerEl.addEventListener('click', (e) => {
-  if (e.target === imagePickerEl) closeImagePicker() // click the backdrop to dismiss
-})
 
 /// Saves a pasted image blob to Attachments/ and drops in its reference. The
 /// bytes go over as a plain array — a paste is one-off and images are modest, so
@@ -1139,7 +976,10 @@ editorEl.addEventListener('contextmenu', (e) => {
     e.preventDefault()
     e.stopPropagation()
     openContextMenu(e.clientX, e.clientY, [
-      { label: 'Insert Image…', run: () => void openImagePicker() },
+      {
+        label: 'Insert Image…',
+        run: () => void openImagePicker((name) => insertImageReference(name, view)),
+      },
     ])
     return
   }
@@ -2446,213 +2286,6 @@ function bulkMenuItems(count: number): MenuItemSpec[] {
   ]
 }
 
-// --- Context menu -----------------------------------------------------------
-// Built by hand rather than using the OS menu, because a webview has no access
-// to a native one. The trade is that it must reimplement the parts people
-// expect for free: dismissal on click-away, Escape, scroll, and window blur,
-// plus flipping when it would open past the window edge.
-
-const contextMenuEl = document.getElementById('context-menu')!
-
-interface MenuItemSpec {
-  label: string
-  /// Omitted for an item that only opens a submenu, and for a separator.
-  run?: () => void | Promise<void>
-  destructive?: boolean
-  /// Turns this item into a submenu. Built lazily, on hover, because the only
-  /// one so far lists the Index's folders and walking the disk to fill a menu
-  /// nobody opened is work for nothing.
-  submenu?: () => MenuItemSpec[] | Promise<MenuItemSpec[]>
-  /// A horizontal rule rather than an item. The label is ignored.
-  separator?: boolean
-  /// A swatch drawn before the label — the colour of the folder an item files
-  /// into, so the menu reads the same way the list does.
-  swatch?: string | null
-}
-
-
-function closeContextMenu() {
-  contextMenuEl.classList.add('hidden')
-  contextMenuEl.replaceChildren()
-}
-
-/// Builds the rows for one menu level. Shared by the menu and its submenus, so
-/// a submenu looks and behaves like the menu it hangs off.
-function menuRows(items: MenuItemSpec[], onPick: () => void): HTMLElement[] {
-  return items.map((item) => {
-    if (item.separator) {
-      const hr = document.createElement('div')
-      hr.className = 'context-separator'
-      return hr
-    }
-    const b = document.createElement('button')
-    b.type = 'button'
-    b.className =
-      'context-item' +
-      (item.destructive ? ' destructive' : '') +
-      (item.submenu ? ' has-submenu' : '')
-    if (item.swatch !== undefined) {
-      const dot = document.createElement('span')
-      dot.className = 'context-swatch'
-      // A folder with no colour still gets the slot, so labels line up.
-      if (item.swatch) dot.style.background = item.swatch
-      else dot.classList.add('empty')
-      b.append(dot)
-    }
-    b.append(document.createTextNode(item.label))
-
-    if (item.submenu) {
-      const panel = document.createElement('div')
-      panel.className = 'context-submenu hidden'
-      b.append(panel)
-      let filled = false
-      b.onmouseenter = async () => {
-        if (!filled) {
-          filled = true
-          panel.replaceChildren(...menuRows(await item.submenu!(), onPick))
-        }
-        panel.classList.remove('hidden')
-        // Flip to the left when there isn't room on the right.
-        const r = panel.getBoundingClientRect()
-        panel.classList.toggle('flip', r.right > window.innerWidth)
-      }
-      b.onmouseleave = () => panel.classList.add('hidden')
-      // A parent that only opens a submenu isn't itself clickable.
-      if (!item.run) b.onclick = (e) => e.stopPropagation()
-    }
-
-    if (item.run) {
-      b.onclick = () => {
-        onPick()
-        void item.run!()
-      }
-    }
-    return b
-  })
-}
-
-function openContextMenu(x: number, y: number, items: MenuItemSpec[]) {
-  contextMenuEl.replaceChildren(...menuRows(items, closeContextMenu))
-  // Placed offscreen-but-measurable first: the size isn't known until the
-  // items are in the DOM, and it's needed to decide whether to flip.
-  contextMenuEl.classList.remove('hidden')
-  contextMenuEl.style.left = '0px'
-  contextMenuEl.style.top = '0px'
-  const { width, height } = contextMenuEl.getBoundingClientRect()
-  const left = x + width > window.innerWidth ? Math.max(0, x - width) : x
-  const top = y + height > window.innerHeight ? Math.max(0, y - height) : y
-  contextMenuEl.style.left = `${left}px`
-  contextMenuEl.style.top = `${top}px`
-}
-
-// `capture` so a click that lands on something interactive closes the menu
-// before that thing handles it, rather than after.
-window.addEventListener('mousedown', (e) => {
-  if (!contextMenuEl.contains(e.target as Node)) closeContextMenu()
-}, true)
-window.addEventListener('blur', closeContextMenu)
-window.addEventListener('scroll', closeContextMenu, true)
-window.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') closeContextMenu()
-})
-// Suppress the webview's own menu everywhere — this is an app, not a page.
-window.addEventListener('contextmenu', (e) => e.preventDefault())
-
-// --- Dialogs -----------------------------------------------------------------
-// Stand-ins for window.prompt / window.confirm / window.alert, none of which
-// work in Tauri's WebView2 — prompt returns null without ever showing, and
-// confirm/alert are suppressed too, so a rename silently did nothing and a
-// merge went through with no warning. These drive an in-app modal instead and
-// read like the browser APIs they replace: `await textPrompt(...)` resolves to
-// the trimmed text or null; `await confirmModal(...)` resolves to a boolean.
-const promptEl = document.getElementById('prompt')!
-const promptMessageEl = document.getElementById('prompt-message')!
-const promptInputEl = document.getElementById('prompt-input') as HTMLInputElement
-const promptFormEl = document.getElementById('prompt-panel') as HTMLFormElement
-const promptOkEl = document.getElementById('prompt-ok') as HTMLButtonElement
-const promptCancelEl = document.getElementById('prompt-cancel') as HTMLButtonElement
-// null means cancelled; a string (possibly empty) means confirmed — so the
-// confirm variant, which has no text field, still distinguishes OK from Cancel.
-let promptResolve: ((value: string | null) => void) | null = null
-
-function closePrompt(value: string | null) {
-  if (!promptResolve) return
-  const resolve = promptResolve
-  promptResolve = null
-  promptEl.classList.add('hidden')
-  // Focus goes back to the search box — the same place every other overlay
-  // hands control back to, so the keyboard never ends up stranded on nothing.
-  searchInput.focus()
-  resolve(value)
-}
-
-/// Opens the modal. `initial === null` is confirm mode: the text field is
-/// hidden and OK resolves to '' (confirmed) while Cancel resolves to null.
-/// Otherwise it's a prompt and OK resolves to the trimmed field value.
-function openDialog(
-  message: string,
-  initial: string | null,
-  okLabel: string,
-  cancelLabel: string | null,
-): Promise<string | null> {
-  // A dialog already open is resolved as cancelled before opening the next, so
-  // a stray double-trigger can never leave two fighting over one input.
-  if (promptResolve) closePrompt(null)
-  const withInput = initial !== null
-  promptMessageEl.textContent = message
-  promptInputEl.value = initial ?? ''
-  promptInputEl.classList.toggle('hidden', !withInput)
-  promptOkEl.textContent = okLabel
-  // A bare alert has no Cancel — one button that just dismisses it.
-  promptCancelEl.classList.toggle('hidden', cancelLabel === null)
-  if (cancelLabel) promptCancelEl.textContent = cancelLabel
-  promptEl.classList.remove('hidden')
-  if (withInput) {
-    promptInputEl.focus()
-    promptInputEl.select()
-  } else {
-    promptOkEl.focus()
-  }
-  return new Promise((resolve) => {
-    promptResolve = resolve
-  })
-}
-
-function textPrompt(message: string, initial = ''): Promise<string | null> {
-  return openDialog(message, initial, 'OK', 'Cancel')
-}
-
-/// A yes/no confirm. Resolves true only when OK is chosen; Cancel, Escape and a
-/// backdrop click all resolve false — the safe default for a destructive step.
-function confirmModal(message: string, okLabel = 'OK'): Promise<boolean> {
-  return openDialog(message, null, okLabel, 'Cancel').then((v) => v !== null)
-}
-
-/// A message with a single dismiss button — the window.alert replacement.
-function alertModal(message: string): Promise<void> {
-  return openDialog(message, null, 'OK', null).then(() => undefined)
-}
-
-promptFormEl.addEventListener('submit', (e) => {
-  e.preventDefault()
-  // Empty string for confirm/alert (no field); trimmed text for a prompt.
-  closePrompt(promptInputEl.classList.contains('hidden') ? '' : promptInputEl.value.trim())
-})
-promptCancelEl.addEventListener('click', () => closePrompt(null))
-// Escape cancels; the capture phase so it beats any list/editor Escape handler
-// while the prompt is the thing on screen.
-promptEl.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') {
-    e.preventDefault()
-    e.stopPropagation()
-    closePrompt(null)
-  }
-})
-// A click on the backdrop (outside the panel) cancels, like the other overlays.
-promptEl.addEventListener('mousedown', (e) => {
-  if (e.target === promptEl) closePrompt(null)
-})
-
 // --- Folders -----------------------------------------------------------------
 // A second axis alongside tags: a note lives in exactly one folder ("which
 // pile"), but can carry many tags ("what it's about").
@@ -3470,7 +3103,7 @@ window.addEventListener('keydown', (e) => {
   // Don't move the list behind a dialog that has taken over the screen.
   if (
     !settingsEl.classList.contains('hidden') ||
-    !promptEl.classList.contains('hidden') ||
+    isDialogOpen() ||
     !referenceEl.classList.contains('hidden')
   ) {
     return
@@ -3629,7 +3262,11 @@ const SHORTCUT_HANDLERS: Partial<Record<ShortcutId, () => void>> = {
     void runSearch()
   },
   extractToNote: () => void extractSelectionToNote(),
-  insertImage: () => void openImagePicker(),
+  insertImage: () => {
+    if (openNoteId || openTemplatePath) {
+      void openImagePicker((name) => insertImageReference(name, view))
+    }
+  },
   focusNextArea: () => {
     if (document.activeElement === searchInput) view.focus()
     else searchInput.focus()

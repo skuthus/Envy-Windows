@@ -18,5 +18,35 @@
       title="Click to rename. Links to this note are updated."
     />
     <div id="popout-editor"></div>
+
+    <!-- Shared with the main window: the app's own right-click menu (used by the
+         image size/rename menu) and the in-app prompt (WebView2 has no
+         window.prompt). The modules that drive these look the elements up by id. -->
+    <div id="context-menu" class="hidden" role="menu"></div>
+    <div id="image-picker" class="hidden" role="dialog" aria-label="Insert image">
+      <div id="image-picker-panel">
+        <div id="image-picker-search">
+          <input
+            id="image-picker-filter"
+            type="text"
+            placeholder="Filter images…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+        </div>
+        <div id="image-picker-grid"></div>
+        <div id="image-picker-empty" class="hidden"></div>
+      </div>
+    </div>
+    <div id="prompt" class="hidden" role="dialog" aria-modal="true" aria-labelledby="prompt-message">
+      <form id="prompt-panel" method="dialog">
+        <label id="prompt-message" for="prompt-input"></label>
+        <input id="prompt-input" type="text" autocomplete="off" spellcheck="false" />
+        <div id="prompt-buttons">
+          <button id="prompt-cancel" type="button">Cancel</button>
+          <button id="prompt-ok" type="submit">OK</button>
+        </div>
+      </form>
+    </div>
   </body>
 </html>

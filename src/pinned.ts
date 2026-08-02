@@ -13,10 +13,12 @@ import { EditorView, keymap, drawSelection } from '@codemirror/view'
 import { EditorState } from '@codemirror/state'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { listen, emit } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { envyStyler, embedHost, isImageTarget } from './styler'
 import { makeEmbedHost } from './embed-host'
+import { openImageMenu, renameAttachmentFlow } from './image-menu'
+import { setPromptFocusReturn } from './prompt-modal'
 import { listEditing } from './lists'
 import { applyTheme, enviousDark, enviousLight } from './theme'
 
@@ -84,8 +86,13 @@ const view = new EditorView({
       keymap.of([...defaultKeymap, ...historyKeymap]),
       EditorView.lineWrapping,
       // Resolves `![[note]]` transclusions and `![[image.png]]` attachments, so
-      // a pinned note renders images (and embeds) like the main window.
-      embedHost.of(makeEmbedHost(() => noteId)),
+      // a pinned note renders images (and embeds) like the main window —
+      // including the image's right-click size/rename/reveal menu.
+      embedHost.of({
+        ...makeEmbedHost(() => noteId),
+        onImageContextMenu: (raw, spec, x, y) =>
+          openImageMenu(raw, spec, x, y, view, (name) => void renamePinnedImage(name)),
+      }),
       envyStyler,
       EditorView.domEventHandlers({
         mousedown: (event, v) => {
@@ -172,6 +179,22 @@ async function flush() {
   window.clearTimeout(saveTimer)
   await save()
 }
+
+/// Renames the attachment behind a right-clicked image. The shared flow rewrites
+/// references vault-wide in Rust; here we flush this popover's buffer first, then
+/// nudge the main window to rescan and reload our own note with the new name.
+function renamePinnedImage(oldName: string) {
+  return renameAttachmentFlow(oldName, {
+    flush,
+    reload: async () => {
+      await emit('index-changed')
+      await load()
+    },
+  })
+}
+
+// A dialog (rename / custom width) hands focus back to the editor in this popover.
+setPromptFocusReturn(() => view.focus())
 
 /// Hiding is deliberately allowed to fail without taking the caller with it.
 ///
